@@ -1,7 +1,6 @@
 # This is a script to convert ScreenOS Services/Objects/Rules to Junos equivalent config
 # Will read input from a file to allow bulk conversions and write output to a file
 
-import os  # used to delete output files before starting so on appending file on each run doesn't mess up newline
 import time  # Time module for calculating runtime of script
 import re  # module for regex
 from IPy import IP # IP lookups and validation module
@@ -148,10 +147,6 @@ def combine_dicts(*args):  # This dict combine syntax is ONLY valid in python >=
                                         **master.default_addr}
 
 
-def clear_screen(): # Used to clear screen to print status of lines processed in realtime in Linux
-    os.system('cls' if os.name == 'nt' else 'clear')
-
-
 def read_file():  # File to read Netscreen config from (INPUT) and then pass to dedicated functions based on regex
 
     start_time = time.time() # Used to calc time per line to process
@@ -169,7 +164,6 @@ def read_file():  # File to read Netscreen config from (INPUT) and then pass to 
 
     for linecount, line in enumerate(input_file):
 
-        clear_screen() # Clear screen so next line displays better (Unhash when not in pycharm)
         print(f'Parsing line: {linecount + 1}/{num_lines}')  # Print line number of x being parsed
 
         # Looks for "set dst-address "something" and nothing else after it, ie for a multi destination address rule:
@@ -222,7 +216,7 @@ def read_file():  # File to read Netscreen config from (INPUT) and then pass to 
             create_address_set(line) # Pass to create address_set
 
         # Match ruleset
-        elif re.search("^set policy id", line):
+        elif re.search("^set policy id.+\s\S", line):
             create_rule(line)
 
         else:  # For config not matching above IF conditional (i.e. not expected format)
@@ -521,8 +515,7 @@ def create_rule(line): # Rule conversion
             junos_service = master.service_dicts[ns_service]
 
             # Look for permit or deny
-            action = re.findall(rf'\b([a-z]+)$', line)[0] # 1st instance. needs index to remove from list format.
-
+            action = re.findall(rf'\b(permit|deny)', line)[-1] # last instance of permit or deny
 
             # Create Junos config
             # List of syntax's to use in rules at end of converted_line variable for the sake of DRY
@@ -541,7 +534,7 @@ def create_rule(line): # Rule conversion
                 converted_config_output(converted_line)
 
     except:
-        pass
+        junk_file_output(line)
 
 
 def multi_line_rule(line, type): # Multi src/dst/service rules

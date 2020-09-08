@@ -2,7 +2,7 @@ This collection of programs is to allow easy bulk conversion form ScreenOS (Nets
 
     git clone ........
 
-(Requirements: Python >= 3.6 & PIP3)
+(Requirements: Python >= 3.6 < 3.8)
 (PIP Packages: os, time, re, IPy)
 execute:
     pip3 install -r requirements.txt
