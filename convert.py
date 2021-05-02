@@ -12,9 +12,7 @@ timenow = datetime.now() # Get date and time into variable
 timestamp = timenow.strftime(f'%Y%m%d_%H%M%S') # Change to useable variable to append to filenames
 
 # Create port list in range 0-65535 at start rather than during loop though each line
-port_range = []
-for i in range(0, 65536):
-    port_range.append(i)
+port_range = [i for i in range(0, 65536)]
 
 # Variable to calc and store how many lines in file being used as input
 num_lines = sum(1 for line in open('netscreen_config.txt'))
