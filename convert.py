@@ -86,7 +86,7 @@ class master():
         "SQL Monitor": "junos-sql-monitor",
         "SQL*Net V1": "junos-sqlnet-v1",
         "SQL*Net V2": "junos-sqlnet-v2",
-        "SSH": "junos-telnet",
+        "SSH": "junos-ssh",
         "SYSLOG": "junos-syslog",
         "TALK": "junos-talk",
         "TCP-ANY": "junos-tcp-any",
