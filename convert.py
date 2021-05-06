@@ -175,7 +175,7 @@ def read_file():  # File to read Netscreen config from (INPUT) and then pass to 
             multi_line_rule(line, f'application')
 
         # Looks for "set service "" (protocol|+)
-        elif re.search("^set service \"\S+\s(protocol|\+)", line):
+        elif re.search("^set service \".+\s(protocol|\+)", line):
 
             # Pass line from file to function for iteration and convert line, return results into variable
             # return 2 values
@@ -194,7 +194,6 @@ def read_file():  # File to read Netscreen config from (INPUT) and then pass to 
 
             # Combine all 3 service dictionaries into 1 for ease of lookups.  Pass to function to perform action.
             combine_dicts("service")
-
 
         # Lookup for "set group service '' add" for creating service groups (app-sets)
         elif re.search("^set group service \"\S+\sadd", line):
@@ -217,7 +216,6 @@ def read_file():  # File to read Netscreen config from (INPUT) and then pass to 
 
         else:  # For config not matching above IF conditional (i.e. not expected format)
             junk_file_output(line)  # Pass line that doesn't appear to be a Netscreen service to Junk_file function
-
 
 
     print(f'number of lines converted: {master.succeeded}')
@@ -496,6 +494,8 @@ def create_rule(line): # Rule conversion
 
             ## Place into master class list for lookups for multi src/dst/services rules
             master.multi_rule_params = [src_zone, dst_zone, policy_id]
+            
+            #TODO fix pattern match to include whitespace
 
             # Get netscreen source address name from line
             ns_src_addr = re.findall(rf'"(\S+)"', line)[2]  # Third instance of "<something>"
@@ -530,6 +530,7 @@ def create_rule(line): # Rule conversion
                 converted_config_output(converted_line)
 
     except:
+        print(line)
         junk_file_output(line)
 
 
@@ -566,8 +567,9 @@ def multi_line_rule(line, type): # Multi src/dst/service rules
 
 def sanity_check_naming(name): # Remove invalid characters from a string
 
-    # Set address_name var to same as address but replace anything in invalid_characters with "_" so works with Junos
-    invalid_characters = [" ", ".", "/", "\"", "\'", "\\", "!", "?", "[", "]", "{", "}", "|", "(", ")"]
+        # Set address_name var to same as address but replace anything in invalid_characters with "_" so works with Junos
+    invalid_characters = [" ", ".", "/", "\"", "\'", "\\", "!", "?", "[", "]", "{", "}", "|", "(", ")", "-", "+"]
+    
     for chars in invalid_characters:
         name = name.replace(chars, "_").lower()
 
