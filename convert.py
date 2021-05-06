@@ -495,19 +495,17 @@ def create_rule(line): # Rule conversion
             ## Place into master class list for lookups for multi src/dst/services rules
             master.multi_rule_params = [src_zone, dst_zone, policy_id]
             
-            #TODO fix pattern match to include whitespace
-
             # Get netscreen source address name from line
-            ns_src_addr = re.findall(rf'"(\S+)"', line)[2]  # Third instance of "<something>"
+            ns_src_addr = re.findall(rf'"([^"]*)"', line)[2]  # Third instance of "<something>"
             # Perform lookup of name against a Dict to get the Junos address name or group
             src_addr = master.address_and_set_dicts[ns_src_addr]
 
             # Get netscreen destination address name from line
-            ns_dst_addr = re.findall(rf'"(\S+)"', line)[3]  # Fourth instance of "<something>"
+            ns_dst_addr = re.findall(rf'"([^"]*)"', line)[3]  # Fourth instance of "<something>"
             # Perform lookup of name against a Dict to get the Junos address name or group
             dst_addr = master.address_and_set_dicts[ns_dst_addr]
-
-            ns_service = re.findall(rf'"(\S+)"', line)[4]  # Fifth instance of "<something>"
+            
+            ns_service = re.findall(rf'"([^"]*)"', line)[4]  # Fifth instance of "<something>"
             junos_service = master.service_dicts[ns_service]
 
             # Look for permit or deny
@@ -529,8 +527,8 @@ def create_rule(line): # Rule conversion
                 # Pass to function to write to file
                 converted_config_output(converted_line)
 
-    except:
-        print(line)
+    except Exception as e:
+        # print(line, e)  Debug exception
         junk_file_output(line)
 
 
@@ -572,7 +570,7 @@ def sanity_check_naming(name): # Remove invalid characters from a string
     
     for chars in invalid_characters:
         name = name.replace(chars, "_").lower()
-
+    
     # Alpha numeric list for characters that Junos names are allowed to START with
     alpha_num = ['a','b','c','d','e','f','g','h','i','j','k','l','m','n','o','p','q','r','s','t','u','v','w','x','y','z','0','1','2','3','4','5','6','7','8','9']
 
