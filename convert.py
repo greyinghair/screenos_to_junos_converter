@@ -175,7 +175,7 @@ def read_file():  # File to read Netscreen config from (INPUT) and then pass to 
             multi_line_rule(line, f'application')
 
         # Looks for "set service "" (protocol|+)
-        elif re.search("^set service \"\S+\s(protocol|\+)", line):
+        elif re.search("^set service \".+\s(protocol|\+)", line):
 
             # Pass line from file to function for iteration and convert line, return results into variable
             # return 2 values
@@ -194,7 +194,6 @@ def read_file():  # File to read Netscreen config from (INPUT) and then pass to 
 
             # Combine all 3 service dictionaries into 1 for ease of lookups.  Pass to function to perform action.
             combine_dicts("service")
-
 
         # Lookup for "set group service '' add" for creating service groups (app-sets)
         elif re.search("^set group service \"\S+\sadd", line):
@@ -217,7 +216,6 @@ def read_file():  # File to read Netscreen config from (INPUT) and then pass to 
 
         else:  # For config not matching above IF conditional (i.e. not expected format)
             junk_file_output(line)  # Pass line that doesn't appear to be a Netscreen service to Junk_file function
-
 
 
     print(f'number of lines converted: {master.succeeded}')
@@ -496,18 +494,18 @@ def create_rule(line): # Rule conversion
 
             ## Place into master class list for lookups for multi src/dst/services rules
             master.multi_rule_params = [src_zone, dst_zone, policy_id]
-
+            
             # Get netscreen source address name from line
-            ns_src_addr = re.findall(rf'"(\S+)"', line)[2]  # Third instance of "<something>"
+            ns_src_addr = re.findall(rf'"([^"]*)"', line)[2]  # Third instance of "<something>"
             # Perform lookup of name against a Dict to get the Junos address name or group
             src_addr = master.address_and_set_dicts[ns_src_addr]
 
             # Get netscreen destination address name from line
-            ns_dst_addr = re.findall(rf'"(\S+)"', line)[3]  # Fourth instance of "<something>"
+            ns_dst_addr = re.findall(rf'"([^"]*)"', line)[3]  # Fourth instance of "<something>"
             # Perform lookup of name against a Dict to get the Junos address name or group
             dst_addr = master.address_and_set_dicts[ns_dst_addr]
-
-            ns_service = re.findall(rf'"(\S+)"', line)[4]  # Fifth instance of "<something>"
+            
+            ns_service = re.findall(rf'"([^"]*)"', line)[4]  # Fifth instance of "<something>"
             junos_service = master.service_dicts[ns_service]
 
             # Look for permit or deny
@@ -529,7 +527,8 @@ def create_rule(line): # Rule conversion
                 # Pass to function to write to file
                 converted_config_output(converted_line)
 
-    except:
+    except Exception as e:
+        # print(line, e)  Debug exception
         junk_file_output(line)
 
 
@@ -566,11 +565,12 @@ def multi_line_rule(line, type): # Multi src/dst/service rules
 
 def sanity_check_naming(name): # Remove invalid characters from a string
 
-    # Set address_name var to same as address but replace anything in invalid_characters with "_" so works with Junos
-    invalid_characters = [" ", ".", "/", "\"", "\'", "\\", "!", "?", "[", "]", "{", "}", "|", "(", ")"]
+        # Set address_name var to same as address but replace anything in invalid_characters with "_" so works with Junos
+    invalid_characters = [" ", ".", "/", "\"", "\'", "\\", "!", "?", "[", "]", "{", "}", "|", "(", ")", "-", "+"]
+    
     for chars in invalid_characters:
         name = name.replace(chars, "_").lower()
-
+    
     # Alpha numeric list for characters that Junos names are allowed to START with
     alpha_num = ['a','b','c','d','e','f','g','h','i','j','k','l','m','n','o','p','q','r','s','t','u','v','w','x','y','z','0','1','2','3','4','5','6','7','8','9']
 
