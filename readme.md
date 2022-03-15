@@ -1,10 +1,11 @@
 This collection of programs is to allow easy bulk conversion form ScreenOS (Netscreeens) to Junos (SRX's).
 
-    git clone ........
+    git clone git@github.com:greyinghair/screenos_to_junos_converter.git
 
 (Requirements: Python >= 3.6 < 3.8)
 (PIP Packages: os, time, re, IPy)
 execute:
+
     pip3 install -r requirements.txt
 
 Put entire firewall config into file, not for partially converting config. 
