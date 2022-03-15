@@ -1,3 +1,5 @@
+# Intro
+
 This collection of programs is to allow easy bulk conversion form ScreenOS (Netscreeens) to Junos (SRX's).
 
     git clone git@github.com:greyinghair/screenos_to_junos_converter.git
@@ -8,20 +10,31 @@ execute:
 
     pip3 install -r requirements.txt
 
+
 Put entire firewall config into file, not for partially converting config. 
 
-This migration does NOT touch NAT, neither MIP's nor DIP's.  That has to be manually reviewed and NAT put
-in place after running in ruleset.  The source NAT, destination NAT & DIP rules will be created minus the NAT config.
-Firewall rules with MIP as destination will NOT be created at all.  
 
-So Netscreen config needs to be gone through manually for any rules with "dip", "nat" or "MIP" in them. 
+## What this programme doesn't convert
 
-Converted rules are named the same as the current Netscreen policy ID's so manually inspect a few rule conversions
-to verify they were converted correctly.
+* NAT (neither MIP's/DIP's/Interface NAT).  (Any policies which include NAT config: source NAT, destination NAT & DIP rules will be created minus the NAT config.
+Firewall rules with MIP as destination will NOT be created at all.)
+* Interfaces
+* VPNs
+* Routes
 
-Lookups not performed nor sanity check on zone naming, will presume zone naming remains the same throughout migration, 
-except for "Management" is reserved in Junos so if that name exists as a zone in netscreen config it  will be changed
-to "System-Management".
+_The Netscreen config needs to be gone through manually for any rules with "dip", "nat" or "MIP" in them to create relevant NAT policies in Junos._
+
+# Scope
+
+Config which is converted from ScreenOS format to JunOS:
+
+* Services/Applications
+* Addresses
+* Address Groups
+* Rules
+
+
+# Guide
 
 Put config to convert into "netscreen_config.txt" then run the python script:
 python3 ./convert.py
@@ -30,4 +43,18 @@ There should be 2 files output to same directory as the convert.py script reside
 was started) is then appended to each filename:
 
     1) The converted config ready to copy and paste in bulk to SRX.
-    2) file will be the lines of config that were NOT converted.
+    2) NOT converted config file will be the lines of config that were NOT converted to JunOS.
+    
+Converted rules are named the same as the current Netscreen policy ID's so manually inspect a few rule conversions
+to verify they were converted correctly.
+
+Lookups are not performed nor are sanity checks against zone naming.  It is prsumed zone naming remains the same across both ScreenOS and JunOS systems, 
+except for the zone named "Management", which is reserved in Junos so if that name exists as a zone in ScreenOS config it will be changed
+to "System-Management" for JunOS.
+
+Converted rules are named the same as the current Netscreen policy ID's so manually inspect a few rule conversions
+to verify they were converted correctly.
+
+Lookups are not performed nor are sanity checks against zone naming.  It is prsumed zone naming remains the same across both ScreenOS and JunOS systems, 
+except for the zone named "Management", which is reserved in Junos so if that name exists as a zone in ScreenOS config it will be changed
+to "System-Management" for JunOS.
