@@ -588,7 +588,6 @@ def sanity_check_naming(name): # Remove invalid characters from a string
     else:
         return name
 
-
 read_file()  # The call to start the run of the functions
 
 # last one is
