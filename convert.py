@@ -588,9 +588,6 @@ def sanity_check_naming(name): # Remove invalid characters from a string
     else:
         return name
 
-
-read_file()  # The call to start the run of the functions
-
 # last one is
 #print(master.address_and_set_dicts)
 #print(master.addresses_ns_to_junos)
@@ -601,5 +598,8 @@ read_file()  # The call to start the run of the functions
 #print(master.addresses_ns_to_junos)
 #print(master.address_group_ns_to_junos_address_set)
 
-# Print out time it took to run this script from start to finish
-print("Runtime:--- %s seconds ---" % (time.time() - start_time))
+
+
+if __name__ == "__main__":
+    read_file()  # The call to start the run of the functions
+    print("Total Runtime:--- %s seconds ---" % (time.time() - start_time)) # Print out time it took to run this script from start to finish
