@@ -6,4 +6,4 @@
 .gitignore
 .python-version
 .DS_Store
-.pyc
+*.pyc
