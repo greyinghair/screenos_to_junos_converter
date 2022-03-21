@@ -6,8 +6,10 @@ import re  # module for regex
 from packages import * # Import local packages
 from datetime import datetime
 
+new_list = []
 
 timenow = datetime.now() # Get date and time into variable
+timestamp = timenow.strftime(f'%Y%m%d_%H%M%S') # Change to useable variable to append to filenames
 
 # Variable to calc and store how many lines in file being used as input
 num_lines = sum(1 for line in open('netscreen_config.txt'))
@@ -127,6 +129,12 @@ class master():
     # List containing src_zone, dst_zone and rule ID/name for backwards lookup for multiple dst/src/services in a rule
     multi_rule_params = []
 
+    # List of all converted (rules ONLY, in Junos format), dans temp testing :-) 
+    converted_config = []
+
+    # List of policy ID's which are disabled in ScreenOS
+    disabled_policy_id = []
+
 
 def combine_dicts(*args):  # This dict combine syntax is ONLY valid in python >= 3.5
 
@@ -140,20 +148,13 @@ def combine_dicts(*args):  # This dict combine syntax is ONLY valid in python >=
                                         **master.default_addr}
 
 
-timestamp = timenow.strftime(f'%Y%m%d_%H%M%S') # Change to useable variable to append to filenames
-
 def converted_config_output(line):  # Write Junos config to (OUTPUT)
-    converted = open(f'converted_{timestamp}.txt', "a")
-    converted.write(line + "\n")  # Write converted config and newline
+    #converted = open(f'converted_{timestamp}.txt', "a")
+    #converted.write(line + "\n")  # Write converted config and newline
     master.succeeded += 1
-    converted.close()  # Close file
+    #converted.close()  # Close file
 
-
-def junk_file_output(line):  # Write lines not conforming to logic to a junk file for later review
-    junk = open(f'not_converted_{timestamp}.txt', "a")
-    junk.write(line)  # Write line to file for later review
-    master.failed += 1
-    junk.close()  # Close file
+    master.converted_config.append(line) # add converted line to list
 
 
 def read_file():  # File to read Netscreen config from (INPUT) and then pass to dedicated functions based on regex
@@ -221,20 +222,25 @@ def read_file():  # File to read Netscreen config from (INPUT) and then pass to 
             combine_dicts("address") # Combine address and address set dictionaries
             create_address_set(line) # Pass to create address_set
 
+        # Find Disabled rule
+        elif re.search("^set policy id .+\sdisable$", line):
+            print(line)
+            policy_id = re.findall(rf'(\d+)', line)[0]  # Policy ID which is 1st instance of whitespace<numbers>whitespace
+            master.disabled_policy_id.append(policy_id) # Add policy ID to list for later lookup and rmoveal of policy config
+
         # Match ruleset
         elif re.search("^set policy id.+\s\S", line):
             create_rule(line)
 
         else:  # For config not matching above IF conditional (i.e. not expected format)
-            junk_file_output(line)  # Pass line that doesn't appear to be a Netscreen service to Junk_file function
+            master.failed += 1 # Increment failed counter
 
 
     print(f'number of lines converted: {master.succeeded}')
-    print(f'number of lines failed and added to junk file: {master.failed}')
+    print(f'number of lines NOT converted: {master.failed}')
 
     print(f'Runtime - Avg parsing per line of config: --- '
           f'{round((time.time() - start_time) / (master.succeeded + master.failed), 2)} seconds ---')
-
 
 
 def multi_server_app_set(ns_service, junos_app_name):  # Create Application SET from service with multiple TCP/UDP or ports
@@ -356,7 +362,8 @@ def create_address_book(original_line): # Address conversion
             converted_config_output(converted_line)
 
         except ValueError: # For entries with a mask (so an IP) but prefix not formed correctly or whitespace
-            junk_file_output( line )
+            master.failed += 1
+            #print(line)
 
     # Find FQDN in address
     else:
@@ -410,6 +417,7 @@ def create_address_set(line): # Address group to address set conversion
 def create_rule(line): # Rule conversion
     try:
 
+
         # Remove 'name "something" ' from the line.  Fewer matches as possible (lazy quantifier ?)
         # so zone name lookups works, so 1st "something" is now always Src Zone.
         line = re.sub( rf'(name\s\"(.+?)\"\s)', '', line)
@@ -417,7 +425,7 @@ def create_rule(line): # Rule conversion
         # Don't convert disabled or ALG IGNORE lines such as 'set policy id 26145 application "IGNORE"'
             # i.e. if NOT 'set policy id <num> from' then don't process further
         if not re.search("^set policy id \d+ from", line ):
-            junk_file_output(line) # Write to not_converted file and don't process further
+            master.failed += 1 # Increment failed counter
             #print(f'junked line {line}')
 
         else:
@@ -453,14 +461,14 @@ def create_rule(line): # Rule conversion
             # Create Junos config
             # List of syntax's to use in rules at end of converted_line variable for the sake of DRY
             rule_params = [f'match source-address {src_addr}',
-                           f'match destination-address {dst_addr}',
-                           f'match application {junos_service}',
-                           f'then {action}']
+                            f'match destination-address {dst_addr}',
+                            f'match application {junos_service}',
+                            f'then {action}']
 
             # Form each line of the rule using the above list
             for x in rule_params:
                 converted_line = f'set security policies from-zone {src_zone} to-zone {dst_zone} policy ' \
-                                      f'{policy_id} {x}'
+                                        f'{policy_id} {x}'
                 #print(converted_line)  #   DEBUG converted rule
 
                 # Pass to function to write to file
@@ -468,7 +476,7 @@ def create_rule(line): # Rule conversion
 
     except Exception as e:
         # print(line, e)  Debug exception
-        junk_file_output(line)
+        master.failed += 1 # Increment failed counter
 
 
 def multi_line_rule(line, type): # Multi src/dst/service rules
@@ -499,21 +507,26 @@ def multi_line_rule(line, type): # Multi src/dst/service rules
         converted_config_output(converted_line)
 
     except: # If lookup fails when building he policy such as against name lookup of "MIP(77.87.179.216)"
-        junk_file_output(line)
+        master.failed += 1 # Increment failed counter
 
-
-# last one is
-#print(master.address_and_set_dicts)
-#print(master.addresses_ns_to_junos)
-#print(master.service_ns_to_junos)
-#print(master.service_grp_to_app_set)
-#print(master.service_dicts)
-#print(master.list_of_zones)
-#print(master.addresses_ns_to_junos)
-#print(master.address_group_ns_to_junos_address_set)
 
 
 if __name__ == "__main__":
     start_time = time.time() # Used for overtime time of run
-    read_file()  # The call to start the run of the functions
+    read_file()  # The call to start the run of the functions   
+
+    # Remove disabled policies and correct counters
+    for x in master.disabled_policy_id: # For each disabled policy ID
+        regex = re.compile(rf'^set security policies.+policy {x}.+') # Regex
+        master.converted_config = [i for i in master.converted_config if not regex.match(i)]    
+        master.succeeded -= 1 # For each entry remove count of succeeded
+        master.failed += 1 # For each entry increment count for failed conversion
+    
+    
+
+    print(f'number of lines converted: {master.succeeded}')
+    print(f'number of lines NOT converted: {master.failed}')
+
     print("Total Runtime:--- %s seconds ---" % (time.time() - start_time)) # Print out time it took to run this script from start to finish
+
+    #print(master.converted_config)
