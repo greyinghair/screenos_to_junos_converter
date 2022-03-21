@@ -148,18 +148,19 @@ def combine_dicts(*args):  # This dict combine syntax is ONLY valid in python >=
                                         **master.default_addr}
 
 
-def converted_config_output(line):  # Write Junos config to (OUTPUT)
-    #converted = open(f'converted_{timestamp}.txt', "a")
-    #converted.write(line + "\n")  # Write converted config and newline
-    master.succeeded += 1
-    #converted.close()  # Close file
-
+def convert_config(line):  
     master.converted_config.append(line) # add converted line to list
+    master.succeeded += 1  # Increment sucess count
+
+
+def converted_config_output():  # Write Junos config from list to file
+    converted = open(f'converted_{timestamp}.txt', "a")
+    for line in master.converted_config:
+        converted.write(line + "\n")  # Write converted config and newline
+    converted.close()  # Close file
 
 
 def read_file():  # File to read Netscreen config from (INPUT) and then pass to dedicated functions based on regex
-
-    start_time = time.time() # Used to calc time per line to process
 
     # Start of new new post cleanup of old files
     input_file = open("netscreen_config.txt", "r")
@@ -168,7 +169,8 @@ def read_file():  # File to read Netscreen config from (INPUT) and then pass to 
     missing_config = ["set applications application udp_161 protocol udp destination-port 161",
                       "set applications application-set junos-dns application junos-dns-udp",
                       "set applications application-set junos-dns application junos-dns-tcp"]
-    map(converted_config_output, missing_config) # Map(function, interable) - instead of for loop
+    
+    map(convert_config, missing_config) # Map(function, interable) - instead of for loop
 
     for linecount, line in enumerate(input_file):
 
@@ -202,7 +204,7 @@ def read_file():  # File to read Netscreen config from (INPUT) and then pass to 
             elif ns_service not in master.service_ns_to_junos:  # If entry DO NOT exist
                 master.service_ns_to_junos[ns_service] = junos_app_name
 
-            converted_config_output(converted_line)  # Send to function to output service lines to file
+            convert_config(converted_line)  # Send to function to output service lines to file
 
             # Combine all 3 service dictionaries into 1 for ease of lookups.  Pass to function to perform action.
             combine_dicts("service")
@@ -236,13 +238,6 @@ def read_file():  # File to read Netscreen config from (INPUT) and then pass to 
             master.failed += 1 # Increment failed counter
 
 
-    print(f'number of lines converted: {master.succeeded}')
-    print(f'number of lines NOT converted: {master.failed}')
-
-    print(f'Runtime - Avg parsing per line of config: --- '
-          f'{round((time.time() - start_time) / (master.succeeded + master.failed), 2)} seconds ---')
-
-
 def multi_server_app_set(ns_service, junos_app_name):  # Create Application SET from service with multiple TCP/UDP or ports
 
     ## this function is called for NS services that have multiple services and port ranges (small number of)
@@ -263,7 +258,7 @@ def multi_server_app_set(ns_service, junos_app_name):  # Create Application SET 
         if ns_service in ns_key:
             first_line_of_grp = (f'set applications application-set {app_set_name}_group application '
                                  f'{junos_value}').lower()
-            converted_config_output(first_line_of_grp)
+            convert_config(first_line_of_grp)
             # Only be called if del is true due to conditions
             delete_from_dict = True  # Change value in variable so entry can be deleted
 
@@ -272,7 +267,7 @@ def multi_server_app_set(ns_service, junos_app_name):  # Create Application SET 
     ## End of multi service + processing
 
     # Output primary line to output to file
-    converted_config_output(converted_line)
+    convert_config(converted_line)
 
 
 def create_app_set(line): # Convert service groups to application sets
@@ -304,7 +299,7 @@ def create_app_set(line): # Convert service groups to application sets
     master.service_dicts[ns_group_name] = f'{junos_app_set_name}'.lower()
 
     # Output primary line to output to service_group file
-    converted_config_output(converted_line)
+    convert_config(converted_line)
 
 
 def zone_name(line): # Find zone name and put into dictionary
@@ -359,7 +354,7 @@ def create_address_book(original_line): # Address conversion
             converted_line = f'set security zones security-zone {zone} address-book address {junos_address_name} ' \
                          f'{prefix_cidr}'
         # Pass to function to write to file
-            converted_config_output(converted_line)
+            convert_config(converted_line)
 
         except ValueError: # For entries with a mask (so an IP) but prefix not formed correctly or whitespace
             master.failed += 1
@@ -375,7 +370,7 @@ def create_address_book(original_line): # Address conversion
             converted_line = f'set security zones security-zone {zone} address-book address {junos_address_name} ' \
                              f'dns-name {fqdn}'
             # Pass to function to write to file
-            converted_config_output(converted_line)
+            convert_config(converted_line)
 
 
 def create_address_set(line): # Address group to address set conversion
@@ -411,7 +406,7 @@ def create_address_set(line): # Address group to address set conversion
                          f'address {junos_address_name}'
 
     # Pass to function to write to file
-    converted_config_output(converted_line)
+    convert_config(converted_line)
 
 
 def create_rule(line): # Rule conversion
@@ -472,7 +467,7 @@ def create_rule(line): # Rule conversion
                 #print(converted_line)  #   DEBUG converted rule
 
                 # Pass to function to write to file
-                converted_config_output(converted_line)
+                convert_config(converted_line)
 
     except Exception as e:
         # print(line, e)  Debug exception
@@ -504,29 +499,26 @@ def multi_line_rule(line, type): # Multi src/dst/service rules
             #print(converted_line)  #   Uncomment to debug
 
         # Pass to function to write to file
-        converted_config_output(converted_line)
+        convert_config(converted_line)
 
     except: # If lookup fails when building he policy such as against name lookup of "MIP(77.87.179.216)"
         master.failed += 1 # Increment failed counter
 
 
+def disabled_rule_cleanup():
+    # Remove disabled policies and correct counters
+    for x in master.disabled_policy_id: # For each disabled policy ID
+        regex = re.compile(rf'^set security policies.+policy {x}.+') # Regex
+        master.converted_config = [i for i in master.converted_config if not regex.match(i)] # Replace everything in list that is NOT matched in REGEX
+        master.succeeded -= 1 # For each entry remove count of succeeded
+        master.failed += 1 # For each entry increment count for failed conversion
+
 
 if __name__ == "__main__":
     start_time = time.time() # Used for overtime time of run
     read_file()  # The call to start the run of the functions   
-
-    # Remove disabled policies and correct counters
-    for x in master.disabled_policy_id: # For each disabled policy ID
-        regex = re.compile(rf'^set security policies.+policy {x}.+') # Regex
-        master.converted_config = [i for i in master.converted_config if not regex.match(i)]    
-        master.succeeded -= 1 # For each entry remove count of succeeded
-        master.failed += 1 # For each entry increment count for failed conversion
-    
-    
-
+    disabled_rule_cleanup() # Remove disabled rules config from list (easier to remove once it has been converted to Junos)
+    converted_config_output() # Post cleanup, write list to file
     print(f'number of lines converted: {master.succeeded}')
     print(f'number of lines NOT converted: {master.failed}')
-
     print("Total Runtime:--- %s seconds ---" % (time.time() - start_time)) # Print out time it took to run this script from start to finish
-
-    #print(master.converted_config)
