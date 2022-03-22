@@ -6,8 +6,6 @@ import re  # module for regex
 from packages import * # Import local packages
 from datetime import datetime
 
-new_list = []
-
 timenow = datetime.now() # Get date and time into variable
 timestamp = timenow.strftime(f'%Y%m%d_%H%M%S') # Change to useable variable to append to filenames
 
