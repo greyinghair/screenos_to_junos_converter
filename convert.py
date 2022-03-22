@@ -520,3 +520,4 @@ if __name__ == "__main__":
     print(f'number of lines converted: {master.succeeded}')
     print(f'number of lines NOT converted: {master.failed}')
     print("Total Runtime:--- %s seconds ---" % (time.time() - start_time)) # Print out time it took to run this script from start to finish
+
