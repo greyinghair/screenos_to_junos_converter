@@ -4,6 +4,6 @@
 *.txt
 .python-version
 .gitignore
-__pycache__/IPy.cpython-38.pyc
-__pycache__/IPy.cpython-38.pyc
 .python-version
+.DS_Store
+*.pyc
