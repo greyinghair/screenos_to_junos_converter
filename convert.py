@@ -168,7 +168,7 @@ def read_file():  # File to read Netscreen config from (INPUT) and then pass to 
                       "set applications application-set junos-dns application junos-dns-udp",
                       "set applications application-set junos-dns application junos-dns-tcp"]
     
-    map(convert_config, missing_config) # Map(function, interable) - instead of for loop
+    [convert_config(i) for i in missing_config]  # Passes missing_config to convert_config.
 
     for linecount, line in enumerate(input_file):
 
