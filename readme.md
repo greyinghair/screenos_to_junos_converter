@@ -13,6 +13,7 @@ Put entire firewall config into file, not for partially converting config.
 
 * NAT (neither MIP's/DIP's/Interface NAT).  (Any policies which include NAT config: source NAT, destination NAT & DIP rules will be created minus the NAT config.
 Firewall rules with MIP as destination will NOT be created at all.)
+* Global rules
 * Disabled rules
 * Interfaces
 * VPNs
