@@ -47,13 +47,6 @@ You can then copy and paste the entire output fro the converted file into your S
 Converted rules are named the same as the current Netscreen policy ID's so manually inspect a few rule conversions
 to verify they were converted correctly.
 
-Lookups are not performed nor are sanity checks against zone naming.  It is prsumed zone naming remains the same across both ScreenOS and JunOS systems, 
-except for the zone named "Management", which is reserved in Junos so if that name exists as a zone in ScreenOS config it will be changed
-to "System-Management" for JunOS.
-
-Converted rules are named the same as the current Netscreen policy ID's so manually inspect a few rule conversions
-to verify they were converted correctly.
-
 Lookups are not performed nor are sanity checks against zone naming.  It is presumed zone naming remains the same across both ScreenOS and JunOS systems, 
 except for the zone named "Management", which is reserved in Junos so if that name exists as a zone in ScreenOS config it will be changed
 to "System-Management" for JunOS.
