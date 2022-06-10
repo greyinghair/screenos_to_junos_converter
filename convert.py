@@ -1,3 +1,4 @@
+# pylint: disable=wildcard-import
 # This is a script to convert ScreenOS Services/Objects/Rules to Junos equivalent config
 # Will read input from a file to allow bulk conversions and write output to a file
 
@@ -127,7 +128,7 @@ class master():
     # List containing src_zone, dst_zone and rule ID/name for backwards lookup for multiple dst/src/services in a rule
     multi_rule_params = []
 
-    # List of all converted (rules ONLY, in Junos format), dans temp testing :-) 
+    # List of all converted (rules ONLY, in Junos format)
     converted_config = []
 
     # List of policy ID's which are disabled in ScreenOS
@@ -305,7 +306,7 @@ def zone_name(line): # Find zone name and put into dictionary
     # Zone. (Don't store in dictionary.) Match first instance of "<non-whitespace>"
     zone = re.findall( rf'"([^"]*)"', line)[0]  # Index0,i.e. 1st instance of ""
     if zone == "management":
-        zone = "System-Management"  # replace management zone name as system-management a reserved zone on SRX's
+        zone = "System-Management"  # replace management zone name as system-management is a reserved zone on SRX's
 
     if zone not in master.list_of_zones:  # If zone name is NOT already in the zone list then:
         master.list_of_zones.append( zone )  # Append zone name to zone list
@@ -398,7 +399,7 @@ def create_address_set(line): # Address group to address set conversion
         converted_line = f'set security zones security-zone {zone} address-book address-set {junos_address_set} ' \
                            f'address-set {junos_address_name}'
 
-    # If member of address set is an address then use below syntax fort junos config:
+    # If member of address set is an address then use below syntax for junos config:
     else:
         converted_line = f'set security zones security-zone {zone} address-book address-set {junos_address_set} ' \
                          f'address {junos_address_name}'
@@ -409,7 +410,6 @@ def create_address_set(line): # Address group to address set conversion
 
 def create_rule(line): # Rule conversion
     try:
-
 
         # Remove 'name "something" ' from the line.  Fewer matches as possible (lazy quantifier ?)
         # so zone name lookups works, so 1st "something" is now always Src Zone.
@@ -499,7 +499,7 @@ def multi_line_rule(line, type): # Multi src/dst/service rules
         # Pass to function to write to file
         convert_config(converted_line)
 
-    except: # If lookup fails when building he policy such as against name lookup of "MIP(77.87.179.216)"
+    except: # If lookup fails when building the policy such as against name lookup of "MIP(77.87.179.216)"
         master.failed += 1 # Increment failed counter
 
 

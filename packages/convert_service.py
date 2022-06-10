@@ -1,5 +1,6 @@
+# pylint: disable=no-else-return
 # Create port list in range 0-65535 at start rather than during loop though each line
-port_range = [i for i in range(0, 65536)]
+port_range = list(range(0, 65536))
 
 def convert_service_in_file(line):  # service to junos app. single line of config from input file post sanity check
 
@@ -25,11 +26,11 @@ def convert_service_in_file(line):  # service to junos app. single line of confi
     # set service "UDP/4370" protocol udp src-port 0-65535 dst-port 4370-4370
 
     for x in port_range:  # Find starting dst port
-        if (f'dst-port {port_range_start[x]}') in line:
+        if f'dst-port {port_range_start[x]}' in line:
             junos_migrated["port_start"] = port_range_start[x]  # put key:value pair into dictionary
 
     for y in port_range:  # Find ending dst port
-        if (f'dst-port {junos_migrated["port_start"]}-{port_range_end[y]}') in line:
+        if f'dst-port {junos_migrated["port_start"]}-{port_range_end[y]}' in line:
             junos_migrated["port_end"] = port_range_end[y]  # put key:value pair into dictionary
 
     # print(junos_migrated)   # DEBUG
