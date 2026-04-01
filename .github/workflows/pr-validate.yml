@@ -1,0 +1,36 @@
+name: PR Validate
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  py-compile-and-test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+
+      - name: Install dev dependencies
+        run: python -m pip install --upgrade pip && python -m pip install -r requirements-dev.txt
+
+      - name: Compile check
+        run: |
+          python -m py_compile \
+            convert.py \
+            packages/converter_core.py \
+            packages/convert_service.py \
+            packages/sanity_check_naming.py \
+            tests/conftest.py \
+            tests/test_convert_service.py \
+            tests/test_sanity_check_naming.py \
+            tests/test_converter_smoke.py
+
+      - name: Run tests
+        run: python -m pytest -q

@@ -1,61 +1,50 @@
-# pylint: disable=no-else-return
-# Create port list in range 0-65535 at start rather than during loop though each line
-port_range = list(range(0, 65536))
+"""Helpers for converting ScreenOS service definitions to Junos applications."""
 
-def convert_service_in_file(line):  # service to junos app. single line of config from input file post sanity check
+from __future__ import annotations
 
-    junos_migrated = {}  # dictionary to put protocol, dst-port start & dst-port end into
+import re
+from typing import Final
 
-    # Find protocol used and add to dictionary
-    proto = ["tcp", "TCP", "udp", "UDP"]  # list of possible protocols
+_SERVICE_PATTERN: Final[re.Pattern[str]] = re.compile(
+    r"(?:protocol|\+)\s+(tcp|udp)\s+src-port\s+\d+-\d+\s+dst-port\s+(\d+)-(\d+)",
+    re.IGNORECASE,
+)
 
-    # loop through each line to extract relevant information
-    for x in range(len(proto)):  # loop through ns line for as many times as there are protocols in the list PROTO
-        if (f'protocol {proto[x]}') in line:
-            junos_migrated["protocol"] = proto[x].lower()  # create extracted protocol key & value in lowercase
 
-        # Condition accounts for multiple protocol NS service which after object creation
-        elif (f'+ {proto[x]}') in line:
-            junos_migrated["protocol"] = proto[x].lower()  # create extracted protocol key & value in lowercase
+def convert_service_in_file(line: str) -> tuple[str, str]:
+    """Convert a single ScreenOS service line into a Junos application entry.
 
-    # Ports
-    port_range_start = port_range  # not needed but makes next bit of code easier to read/understand
-    port_range_end = port_range  # not needed but makes next bit of code easier to read/understand
+    Returns:
+        tuple of (`junos_application_name`, `junos_config_line`)
 
-    # below 2 x for loops to extract dst port range such as 4370-4370 in below example:
-    # set service "UDP/4370" protocol udp src-port 0-65535 dst-port 4370-4370
+    Raises:
+        ValueError: if protocol/ports cannot be parsed from the input line.
+    """
 
-    for x in port_range:  # Find starting dst port
-        if f'dst-port {port_range_start[x]}' in line:
-            junos_migrated["port_start"] = port_range_start[x]  # put key:value pair into dictionary
+    match = _SERVICE_PATTERN.search(line)
+    if not match:
+        raise ValueError(f"Unable to parse service definition: {line.strip()}")
 
-    for y in port_range:  # Find ending dst port
-        if f'dst-port {junos_migrated["port_start"]}-{port_range_end[y]}' in line:
-            junos_migrated["port_end"] = port_range_end[y]  # put key:value pair into dictionary
+    protocol = match.group(1).lower()
+    port_start = int(match.group(2))
+    port_end = int(match.group(3))
 
-    # print(junos_migrated)   # DEBUG
+    if port_start > port_end:
+        raise ValueError(
+            f"Invalid destination port range {port_start}-{port_end} in: {line.strip()}"
+        )
 
-    # Form the Junos service config from protocol/port info as extracted above and put into variable
-    # set applications application UDP_902 protocol udp destination-port 902
-    # set applications application TCP_49152-65535 protocol tcp destination-port 49152-65535
-
-    if junos_migrated["port_start"] == junos_migrated["port_end"]:  # If destination port range is only single port
-        junos_service = f'set applications application {junos_migrated["protocol"]}_{junos_migrated["port_start"]} ' \
-                        f'protocol {junos_migrated["protocol"]} destination-port {junos_migrated["port_start"]}'
-
-        # Create variable with Junos App name based on protocol and dst port
-        junos_app_name = (f'{junos_migrated["protocol"]}_{junos_migrated["port_start"]}')
-
-        # Return values of Junos App name & the converted config line
+    if port_start == port_end:
+        junos_app_name = f"{protocol}_{port_start}"
+        junos_service = (
+            f"set applications application {junos_app_name} "
+            f"protocol {protocol} destination-port {port_start}"
+        )
         return junos_app_name, junos_service
 
-    else:  # If the port range is more than a single more name it using start-end ports
-        junos_service = f'set applications application {junos_migrated["protocol"]}_{junos_migrated["port_start"]}-' \
-                        f'{junos_migrated["port_end"]} protocol {junos_migrated["protocol"]} destination-port ' \
-                        f'{junos_migrated["port_start"]}-{junos_migrated["port_end"]}'
-
-        # Create variable with Junos App name based on protocol and dst port range
-        junos_app_name = (f'{junos_migrated["protocol"]}_{junos_migrated["port_start"]}-{junos_migrated["port_end"]}')
-
-        # Return values of Junos App name & the converted config line
-        return junos_app_name, junos_service
+    junos_app_name = f"{protocol}_{port_start}-{port_end}"
+    junos_service = (
+        f"set applications application {junos_app_name} "
+        f"protocol {protocol} destination-port {port_start}-{port_end}"
+    )
+    return junos_app_name, junos_service

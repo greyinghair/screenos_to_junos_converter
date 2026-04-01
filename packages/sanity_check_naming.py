@@ -1,24 +1,25 @@
-def sanity_check_naming(name): # Remove invalid characters from a string
+"""Name normalization helpers for Junos-compatible identifiers."""
 
-        # Set address_name var to same as address but replace anything in invalid_characters with "_" so works with Junos
-    invalid_characters = [" ", ".", "/", "\"", "\'", "\\", "!", "?", "[", "]", "{", "}", "|", "(", ")", "-", "+"]
-    
-    for chars in invalid_characters:
-        name = name.replace(chars, "_").lower()
-    
-    # Alpha numeric list for characters that Junos names are allowed to START with
-    alpha_num = ['a','b','c','d','e','f','g','h','i','j','k','l','m','n','o','p','q','r','s','t','u','v','w','x','y','z','0','1','2','3','4','5','6','7','8','9']
+from __future__ import annotations
 
-    # Only if start (index 0 / 1st character) of name is NOT alphanumeric
-    if name[0].lower() not in alpha_num:
-        amended_name = "" # Blank var but populated 4 lines down so can be returned to function outside of loop
-        # loop to account for name starting with more than 1 non valid character such as ..dan or //dan
-        while name[0].lower() not in alpha_num:
-            amended_name = name[1:] # Slice from index 1 onwards, ie removal of 1st character
-            # print(f'address starting with invalid character = {amended_name}')    #   Debug invalid naming
-            name = amended_name # Change name to use the corrected string to stop loop when string starts alphanumeric
-        return amended_name
+import re
+from typing import Final
 
-    # Else, return name after earlier check and removal of non valid characters
-    else:
-        return name
+_INVALID_CHARS: Final[str] = ' ./"\'\\!?[]{}|()-+'
+_TRANSLATION_TABLE: Final[dict[int, int | str | None]] = str.maketrans(
+    {char: "_" for char in _INVALID_CHARS}
+)
+
+
+def sanity_check_naming(name: str) -> str:
+    """Normalize ScreenOS object names for Junos compatibility.
+
+    - Replaces common invalid characters with `_`
+    - Lowercases output
+    - Ensures first character is alphanumeric; strips leading non-alphanumeric chars
+    - Returns `unnamed` if normalization empties the value
+    """
+
+    normalized = name.translate(_TRANSLATION_TABLE).lower().strip()
+    normalized = re.sub(r"^[^a-z0-9]+", "", normalized)
+    return normalized or "unnamed"

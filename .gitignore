@@ -1,9 +1,15 @@
 /venv/
 .idea/
 .vscode/settings.json
-*.txt
 .python-version
 .gitignore
 .python-version
 .DS_Store
 *.pyc
+./__pycache__/
+.devcontainer/
+/scripts/session-close.sh
+!requirements-dev.txt
+!requirements.txt
+input/*.txt
+outputs/*.txt
