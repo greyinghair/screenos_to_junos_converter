@@ -8,7 +8,7 @@
 *.pyc
 ./__pycache__/
 .devcontainer/
-/scripts/session-close.sh
+scripts/session-close.sh
 !requirements-dev.txt
 !requirements.txt
 input/*.txt
