@@ -10,6 +10,11 @@ on:
         description: "Release version (example: 1.2.3 or v1.2.3)"
         required: true
         type: string
+      target_commitish:
+        description: "Commit, branch, or tag to release (example: 66d3df8 or main)"
+        required: false
+        default: ""
+        type: string
       prerelease:
         description: "Mark this as a prerelease"
         required: false
@@ -92,6 +97,8 @@ jobs:
             }
 
             TAG="v${NORMALIZED_VERSION}"
+            TARGET_COMMITISH="${{ github.event.inputs.target_commitish }}"
+            TARGET_COMMITISH="${TARGET_COMMITISH:-${GITHUB_SHA}}"
 
             PRERELEASE="${{ github.event.inputs.prerelease }}"
             PRERELEASE_TAG="${{ github.event.inputs.prerelease_tag }}"
@@ -106,6 +113,7 @@ jobs:
             fi
           else
             TAG="${GITHUB_REF_NAME}"
+            TARGET_COMMITISH="${GITHUB_SHA}"
             if [[ "$TAG" == *-* ]]; then
               PRERELEASE="true"
             else
@@ -138,6 +146,7 @@ jobs:
           fi
 
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "target_commitish=$TARGET_COMMITISH" >> "$GITHUB_OUTPUT"
           echo "prerelease=$PRERELEASE" >> "$GITHUB_OUTPUT"
           echo "prerelease_tag=$PRERELEASE_TAG" >> "$GITHUB_OUTPUT"
           echo "stable_tag=$STABLE_TAG" >> "$GITHUB_OUTPUT"
@@ -150,6 +159,7 @@ jobs:
         uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ steps.meta.outputs.tag }}
+          target_commitish: ${{ steps.meta.outputs.target_commitish }}
           name: Release ${{ steps.meta.outputs.tag }}
           generate_release_notes: true
           prerelease: ${{ steps.meta.outputs.prerelease }}
@@ -159,6 +169,7 @@ jobs:
         if: ${{ steps.meta.outputs.update_stable_tag == 'true' || steps.meta.outputs.update_prerelease_tag == 'true' || steps.meta.outputs.update_latest_tag == 'true' }}
         env:
           RELEASE_TAG_PUSH_TOKEN: ${{ secrets.RELEASE_TAG_PUSH_TOKEN }}
+          TARGET_COMMITISH: ${{ steps.meta.outputs.target_commitish }}
           TARGET_TAG: ${{ steps.meta.outputs.tag }}
           PRERELEASE_TAG: ${{ steps.meta.outputs.prerelease_tag }}
           STABLE_TAG: ${{ steps.meta.outputs.stable_tag }}
@@ -191,7 +202,7 @@ jobs:
           move_tag() {
             local floating_tag="$1"
             [[ -n "$floating_tag" ]] || return 0
-            git tag -fa "$floating_tag" "$TARGET_TAG" -m "Move $floating_tag -> $TARGET_TAG"
+            git tag -fa "$floating_tag" "$TARGET_COMMITISH" -m "Move $floating_tag -> $TARGET_TAG ($TARGET_COMMITISH)"
             if ! git push "$PUSH_REMOTE" "refs/tags/$floating_tag" --force; then
               echo "Failed to move floating tag '$floating_tag' to '$TARGET_TAG'." >&2
               echo "If this release points to commits that modify files under .github/workflows/," >&2

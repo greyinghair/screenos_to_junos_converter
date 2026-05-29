@@ -6,4 +6,5 @@ All notable changes to this project are documented in this file.
 
 - docs: moved GitHub workflow and release automation setup details out of `readme.md` into `docs/repository-maintenance.md`.
 - docs: kept `readme.md` focused on program behavior, usage, and operation.
+- ci: manual releases can now target a specific historic commit, branch, or tag via `target_commitish`.
 - ci: release workflow now supports multiple floating tags on the same versioned release, including optional `pre-release`, `latest`, and `stable` tags.
