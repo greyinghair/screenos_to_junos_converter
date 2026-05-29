@@ -8,3 +8,4 @@ All notable changes to this project are documented in this file.
 - docs: kept `readme.md` focused on program behavior, usage, and operation.
 - ci: manual releases can now target a specific historic commit, branch, or tag via `target_commitish`.
 - ci: release workflow now supports multiple floating tags on the same versioned release, including optional `pre-release`, `latest`, and `stable` tags.
+- ci: release creation now uses `RELEASE_TAG_PUSH_TOKEN` (when present) to avoid 403 integration errors on protected historic commits.
