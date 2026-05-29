@@ -52,6 +52,7 @@ jobs:
         uses: actions/checkout@v6
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Resolve release metadata
         id: meta
@@ -155,6 +156,9 @@ jobs:
           if [[ -n "${RELEASE_TAG_PUSH_TOKEN:-}" ]]; then
             PUSH_REMOTE="https://x-access-token:${RELEASE_TAG_PUSH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
           fi
+
+          # Ensure checkout's default token header cannot override PAT-based pushes.
+          git config --local --unset-all http.https://github.com/.extraheader || true
 
           move_tag() {
             local floating_tag="$1"
