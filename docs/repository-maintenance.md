@@ -16,6 +16,7 @@ Release workflow file: `.github/workflows/release.yml`
 - Automatic: push a tag matching `v*.*.*` (for example `v1.4.0`)
 - Manual: run workflow `Release` and provide `version` as either `1.2.3` or `v1.2.3`
 - Optional for manual runs: set `target_commitish` to a specific commit, branch, or tag (for example `66d3df8`) to create the release from that historic ref
+- Short commit SHAs are resolved to full commit IDs before calling the GitHub release API
 
 ### Floating Release Tags
 
