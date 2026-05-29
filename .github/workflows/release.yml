@@ -49,7 +49,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
@@ -120,7 +120,7 @@ jobs:
           echo "update_latest_tag=$UPDATE_LATEST_TAG" >> "$GITHUB_OUTPUT"
 
       - name: Create or update GitHub release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ steps.meta.outputs.tag }}
           name: Release ${{ steps.meta.outputs.tag }}
@@ -144,6 +144,14 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
           PUSH_REMOTE="origin"
+          if [[ "${UPDATE_STABLE_TAG}" == "true" || "${UPDATE_LATEST_TAG}" == "true" ]]; then
+            if [[ -z "${RELEASE_TAG_PUSH_TOKEN:-}" ]]; then
+              echo "Floating tag updates require RELEASE_TAG_PUSH_TOKEN secret (contents+workflows write)." >&2
+              echo "Disable update_stable_tag/update_latest_tag for this run or add the secret." >&2
+              exit 1
+            fi
+          fi
+
           if [[ -n "${RELEASE_TAG_PUSH_TOKEN:-}" ]]; then
             PUSH_REMOTE="https://x-access-token:${RELEASE_TAG_PUSH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
           fi

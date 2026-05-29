@@ -122,6 +122,8 @@ CI also runs these checks automatically on every pull request via `.github/workf
 ### Automated Releases
 Release automation is defined in `.github/workflows/release.yml`.
 
+Workflows are pinned to Node 24-compatible action majors (`actions/checkout@v6`, `actions/setup-python@v6`, `github/codeql-action@v4`, and `softprops/action-gh-release@v3`).
+
 - Auto release: push a version tag matching `v*.*.*` (for example `v1.4.0`).
 - Manual release: run the `Release` workflow from GitHub Actions and provide `version`.
 
