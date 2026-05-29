@@ -85,6 +85,28 @@ jobs:
             esac
           }
 
+          resolve_commitish() {
+            local c="$1"
+
+            if git rev-parse --verify "${c}^{commit}" >/dev/null 2>&1; then
+              git rev-parse --verify "${c}^{commit}"
+              return 0
+            fi
+
+            if git rev-parse --verify "origin/${c}^{commit}" >/dev/null 2>&1; then
+              git rev-parse --verify "origin/${c}^{commit}"
+              return 0
+            fi
+
+            git fetch --no-tags origin "$c" >/dev/null 2>&1 || true
+            if git rev-parse --verify "FETCH_HEAD^{commit}" >/dev/null 2>&1; then
+              git rev-parse --verify "FETCH_HEAD^{commit}"
+              return 0
+            fi
+
+            return 1
+          }
+
           if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
             RAW_VERSION="${{ github.event.inputs.version }}"
             # Accept either 1.2.3 / 1.2.3-rc.1 or v1.2.3 / V1.2.3-rc.1.
@@ -143,6 +165,11 @@ jobs:
             if [[ "$PRERELEASE" != "true" ]]; then
               UPDATE_PRERELEASE_TAG="false"
             fi
+          fi
+
+          if ! TARGET_COMMITISH="$(resolve_commitish "$TARGET_COMMITISH")"; then
+            echo "Invalid target_commitish '${TARGET_COMMITISH}'. Provide a valid commit SHA, branch, or tag." >&2
+            exit 1
           fi
 
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
