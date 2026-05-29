@@ -158,6 +158,7 @@ jobs:
       - name: Create or update GitHub release
         uses: softprops/action-gh-release@v3
         with:
+          token: ${{ secrets.RELEASE_TAG_PUSH_TOKEN != '' && secrets.RELEASE_TAG_PUSH_TOKEN || github.token }}
           tag_name: ${{ steps.meta.outputs.tag }}
           target_commitish: ${{ steps.meta.outputs.target_commitish }}
           name: Release ${{ steps.meta.outputs.tag }}

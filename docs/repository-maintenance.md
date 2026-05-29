@@ -43,12 +43,14 @@ The GitHub Release object itself still uses the version tag. The `pre-release` f
 
 ### Token Requirements For Tag Moves
 
-If floating tag updates point to a commit that changes files under `.github/workflows/`, GitHub can reject updates made with the default Actions token.
+If release creation or floating tag updates point to a commit that changes files under `.github/workflows/`, GitHub can reject updates made with the default Actions token.
 
 Set repository secret `RELEASE_TAG_PUSH_TOKEN` with:
 
 - `contents: write`
 - `workflows: write`
+
+This token is used for both creating/updating the GitHub Release and moving floating tags.
 
 ### Action Runtime Compatibility
 
