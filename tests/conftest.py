@@ -10,8 +10,8 @@ def minimal_config_text() -> str:
     return "\n".join(
         [
             'set service "TCP/80" protocol tcp src-port 0-65535 dst-port 80-80',
-            'set address "Trust" "SRC1" 10.0.0.1 255.255.255.255',
-            'set address "Untrust" "DST1" 20.0.0.1 255.255.255.255',
+            'set address "Trust" "SRC1" 192.0.2.1 255.255.255.255',
+            'set address "Untrust" "DST1" 198.51.100.1 255.255.255.255',
             'set policy id 1 from "Trust" to "Untrust"  "SRC1" "DST1" "TCP/80" permit',
         ]
     )
