@@ -172,6 +172,15 @@ jobs:
             exit 1
           fi
 
+          # GitHub "Latest" designation is separate from floating tags.
+          if [[ "$PRERELEASE" == "true" ]]; then
+            MAKE_LATEST="false"
+          elif [[ "$UPDATE_LATEST_TAG" == "true" ]]; then
+            MAKE_LATEST="true"
+          else
+            MAKE_LATEST="false"
+          fi
+
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "target_commitish=$TARGET_COMMITISH" >> "$GITHUB_OUTPUT"
           echo "prerelease=$PRERELEASE" >> "$GITHUB_OUTPUT"
@@ -181,6 +190,16 @@ jobs:
           echo "update_stable_tag=$UPDATE_STABLE_TAG" >> "$GITHUB_OUTPUT"
           echo "update_prerelease_tag=$UPDATE_PRERELEASE_TAG" >> "$GITHUB_OUTPUT"
           echo "update_latest_tag=$UPDATE_LATEST_TAG" >> "$GITHUB_OUTPUT"
+          echo "make_latest=$MAKE_LATEST" >> "$GITHUB_OUTPUT"
+
+          echo "Resolved release metadata:"
+          echo "  tag=$TAG"
+          echo "  target_commitish=$TARGET_COMMITISH"
+          echo "  prerelease=$PRERELEASE"
+          echo "  update_stable_tag=$UPDATE_STABLE_TAG"
+          echo "  update_prerelease_tag=$UPDATE_PRERELEASE_TAG"
+          echo "  update_latest_tag=$UPDATE_LATEST_TAG"
+          echo "  make_latest=$MAKE_LATEST"
 
       - name: Create or update GitHub release
         uses: softprops/action-gh-release@v3
@@ -191,7 +210,7 @@ jobs:
           name: Release ${{ steps.meta.outputs.tag }}
           generate_release_notes: true
           prerelease: ${{ steps.meta.outputs.prerelease }}
-          make_latest: ${{ steps.meta.outputs.prerelease == 'true' && 'false' || (steps.meta.outputs.update_latest_tag == 'true' && 'true' || 'false') }}
+          make_latest: ${{ steps.meta.outputs.make_latest }}
 
       - name: Move floating tags
         if: ${{ steps.meta.outputs.update_stable_tag == 'true' || steps.meta.outputs.update_prerelease_tag == 'true' || steps.meta.outputs.update_latest_tag == 'true' }}
@@ -250,3 +269,53 @@ jobs:
           if [[ "${UPDATE_LATEST_TAG}" == "true" ]]; then
             move_tag "$LATEST_TAG"
           fi
+
+      - name: Verify floating tag targets
+        if: ${{ steps.meta.outputs.update_stable_tag == 'true' || steps.meta.outputs.update_prerelease_tag == 'true' || steps.meta.outputs.update_latest_tag == 'true' }}
+        env:
+          PRERELEASE_TAG: ${{ steps.meta.outputs.prerelease_tag }}
+          STABLE_TAG: ${{ steps.meta.outputs.stable_tag }}
+          LATEST_TAG: ${{ steps.meta.outputs.latest_tag }}
+          UPDATE_STABLE_TAG: ${{ steps.meta.outputs.update_stable_tag }}
+          UPDATE_PRERELEASE_TAG: ${{ steps.meta.outputs.update_prerelease_tag }}
+          UPDATE_LATEST_TAG: ${{ steps.meta.outputs.update_latest_tag }}
+        run: |
+          set -euo pipefail
+
+          resolve_remote_tag_sha() {
+            local t="$1"
+            local peeled=""
+            local plain=""
+
+            peeled="$(git ls-remote --refs --tags origin "refs/tags/${t}^{}" | awk '{print $1}')"
+            if [[ -n "$peeled" ]]; then
+              echo "$peeled"
+              return 0
+            fi
+
+            plain="$(git ls-remote --refs --tags origin "refs/tags/${t}" | awk '{print $1}')"
+            if [[ -n "$plain" ]]; then
+              echo "$plain"
+              return 0
+            fi
+
+            echo "missing"
+          }
+
+          print_tag_state() {
+            local label="$1"
+            local tag_name="$2"
+            local enabled="$3"
+
+            if [[ "$enabled" != "true" ]]; then
+              echo "$label ($tag_name): skipped"
+              return 0
+            fi
+
+            echo "$label ($tag_name): $(resolve_remote_tag_sha "$tag_name")"
+          }
+
+          echo "Floating tag targets on remote after update:"
+          print_tag_state "stable" "$STABLE_TAG" "$UPDATE_STABLE_TAG"
+          print_tag_state "pre-release" "$PRERELEASE_TAG" "$UPDATE_PRERELEASE_TAG"
+          print_tag_state "latest" "$LATEST_TAG" "$UPDATE_LATEST_TAG"

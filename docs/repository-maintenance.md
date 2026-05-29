@@ -44,6 +44,8 @@ The GitHub Release object itself still uses the version tag. The `pre-release` f
 
 For non-prerelease releases, `UPDATE_LATEST_TAG` / `update_latest_tag` also controls whether the GitHub Release is marked as Latest.
 
+`stable` is a floating git tag only; GitHub Releases does not have a separate "Stable" badge.
+
 ### Token Requirements For Tag Moves
 
 If release creation or floating tag updates point to a commit that changes files under `.github/workflows/`, GitHub can reject updates made with the default Actions token.
