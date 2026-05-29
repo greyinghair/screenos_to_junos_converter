@@ -42,6 +42,8 @@ One Git commit can therefore be referenced by multiple tags at once:
 
 The GitHub Release object itself still uses the version tag. The `pre-release` floating tag is only moved when the release is marked prerelease.
 
+For non-prerelease releases, `UPDATE_LATEST_TAG` / `update_latest_tag` also controls whether the GitHub Release is marked as Latest.
+
 ### Token Requirements For Tag Moves
 
 If release creation or floating tag updates point to a commit that changes files under `.github/workflows/`, GitHub can reject updates made with the default Actions token.
