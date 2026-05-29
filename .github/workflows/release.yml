@@ -131,6 +131,7 @@ jobs:
       - name: Move floating tags
         if: ${{ steps.meta.outputs.update_stable_tag == 'true' || steps.meta.outputs.update_latest_tag == 'true' }}
         env:
+          RELEASE_TAG_PUSH_TOKEN: ${{ secrets.RELEASE_TAG_PUSH_TOKEN }}
           TARGET_TAG: ${{ steps.meta.outputs.tag }}
           STABLE_TAG: ${{ steps.meta.outputs.stable_tag }}
           LATEST_TAG: ${{ steps.meta.outputs.latest_tag }}
@@ -142,11 +143,21 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
+          PUSH_REMOTE="origin"
+          if [[ -n "${RELEASE_TAG_PUSH_TOKEN:-}" ]]; then
+            PUSH_REMOTE="https://x-access-token:${RELEASE_TAG_PUSH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          fi
+
           move_tag() {
             local floating_tag="$1"
             [[ -n "$floating_tag" ]] || return 0
             git tag -fa "$floating_tag" "$TARGET_TAG" -m "Move $floating_tag -> $TARGET_TAG"
-            git push origin "refs/tags/$floating_tag" --force
+            if ! git push "$PUSH_REMOTE" "refs/tags/$floating_tag" --force; then
+              echo "Failed to move floating tag '$floating_tag' to '$TARGET_TAG'." >&2
+              echo "If this release points to commits that modify files under .github/workflows/," >&2
+              echo "set repository secret RELEASE_TAG_PUSH_TOKEN to a token with workflows+contents write permissions." >&2
+              exit 1
+            fi
           }
 
           if [[ "${UPDATE_STABLE_TAG}" == "true" ]]; then
