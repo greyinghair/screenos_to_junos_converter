@@ -100,6 +100,10 @@ jobs:
             UPDATE_STABLE_TAG="$(bool_or_default "${{ github.event.inputs.update_stable_tag }}" "true")"
             UPDATE_PRERELEASE_TAG="$(bool_or_default "${{ github.event.inputs.update_prerelease_tag }}" "false")"
             UPDATE_LATEST_TAG="$(bool_or_default "${{ github.event.inputs.update_latest_tag }}" "true")"
+            
+            if [[ "$PRERELEASE" != "true" ]]; then
+              UPDATE_PRERELEASE_TAG="false"
+            fi
           else
             TAG="${GITHUB_REF_NAME}"
             if [[ "$TAG" == *-* ]]; then

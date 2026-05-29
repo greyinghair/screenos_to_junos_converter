@@ -33,10 +33,12 @@ Push-trigger defaults are configured in `.github/release-tags.env`:
 - `UPDATE_PRERELEASE_TAG`
 - `UPDATE_LATEST_TAG`
 
-One release can therefore point to multiple tags at once:
+One Git commit can therefore be referenced by multiple tags at once:
 
 - the immutable version tag (for example `v2.0.1`)
 - optional floating channel tags such as `pre-release`, `latest`, and `stable`
+
+The GitHub Release object itself still uses the version tag. The `pre-release` floating tag is only moved when the release is marked prerelease.
 
 ### Token Requirements For Tag Moves
 
