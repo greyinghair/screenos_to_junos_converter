@@ -132,10 +132,12 @@ Floating tags are also maintained so you can keep stable/latest aliases up to da
 For push-triggered releases, edit `.github/release-tags.env` to change defaults:
 - `STABLE_TAG` (default: `stable`)
 - `LATEST_TAG` (default: `latest`)
-- `UPDATE_STABLE_TAG` (default: `true`)
+- `UPDATE_STABLE_TAG` (default: `false`)
 - `UPDATE_LATEST_TAG` (default: `true`)
 
 Manual runs let you override all of these per release via workflow inputs.
+
+If floating tag updates target a commit that changes files under `.github/workflows/`, GitHub may reject tag pushes from the default Actions token. In that case, add repository secret `RELEASE_TAG_PUSH_TOKEN` with write access to both workflows and contents.
 
 ### Docker
 ```bash
