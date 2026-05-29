@@ -15,6 +15,11 @@ on:
         required: false
         default: false
         type: boolean
+      prerelease_tag:
+        description: "Floating prerelease tag name"
+        required: false
+        default: pre-release
+        type: string
       stable_tag:
         description: "Floating stable tag name"
         required: false
@@ -27,6 +32,11 @@ on:
         type: string
       update_stable_tag:
         description: "Move the stable floating tag to this release"
+        required: false
+        default: false
+        type: boolean
+      update_prerelease_tag:
+        description: "Move the prerelease floating tag to this release"
         required: false
         default: false
         type: boolean
@@ -84,9 +94,11 @@ jobs:
             TAG="v${NORMALIZED_VERSION}"
 
             PRERELEASE="${{ github.event.inputs.prerelease }}"
+            PRERELEASE_TAG="${{ github.event.inputs.prerelease_tag }}"
             STABLE_TAG="${{ github.event.inputs.stable_tag }}"
             LATEST_TAG="${{ github.event.inputs.latest_tag }}"
             UPDATE_STABLE_TAG="$(bool_or_default "${{ github.event.inputs.update_stable_tag }}" "true")"
+            UPDATE_PRERELEASE_TAG="$(bool_or_default "${{ github.event.inputs.update_prerelease_tag }}" "false")"
             UPDATE_LATEST_TAG="$(bool_or_default "${{ github.event.inputs.update_latest_tag }}" "true")"
           else
             TAG="${GITHUB_REF_NAME}"
@@ -96,9 +108,11 @@ jobs:
               PRERELEASE="false"
             fi
 
+            PRERELEASE_TAG="pre-release"
             STABLE_TAG="stable"
             LATEST_TAG="latest"
             UPDATE_STABLE_TAG="true"
+            UPDATE_PRERELEASE_TAG="true"
             UPDATE_LATEST_TAG="true"
 
             # Optional repository-level defaults for push-triggered releases.
@@ -107,17 +121,25 @@ jobs:
               source .github/release-tags.env
             fi
 
+            PRERELEASE_TAG="${PRERELEASE_TAG:-pre-release}"
             STABLE_TAG="${STABLE_TAG:-stable}"
             LATEST_TAG="${LATEST_TAG:-latest}"
             UPDATE_STABLE_TAG="$(bool_or_default "${UPDATE_STABLE_TAG:-true}" "true")"
+            UPDATE_PRERELEASE_TAG="$(bool_or_default "${UPDATE_PRERELEASE_TAG:-true}" "true")"
             UPDATE_LATEST_TAG="$(bool_or_default "${UPDATE_LATEST_TAG:-true}" "true")"
+
+            if [[ "$PRERELEASE" != "true" ]]; then
+              UPDATE_PRERELEASE_TAG="false"
+            fi
           fi
 
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "prerelease=$PRERELEASE" >> "$GITHUB_OUTPUT"
+          echo "prerelease_tag=$PRERELEASE_TAG" >> "$GITHUB_OUTPUT"
           echo "stable_tag=$STABLE_TAG" >> "$GITHUB_OUTPUT"
           echo "latest_tag=$LATEST_TAG" >> "$GITHUB_OUTPUT"
           echo "update_stable_tag=$UPDATE_STABLE_TAG" >> "$GITHUB_OUTPUT"
+          echo "update_prerelease_tag=$UPDATE_PRERELEASE_TAG" >> "$GITHUB_OUTPUT"
           echo "update_latest_tag=$UPDATE_LATEST_TAG" >> "$GITHUB_OUTPUT"
 
       - name: Create or update GitHub release
@@ -130,13 +152,15 @@ jobs:
           make_latest: ${{ steps.meta.outputs.prerelease == 'true' && 'false' || 'true' }}
 
       - name: Move floating tags
-        if: ${{ steps.meta.outputs.update_stable_tag == 'true' || steps.meta.outputs.update_latest_tag == 'true' }}
+        if: ${{ steps.meta.outputs.update_stable_tag == 'true' || steps.meta.outputs.update_prerelease_tag == 'true' || steps.meta.outputs.update_latest_tag == 'true' }}
         env:
           RELEASE_TAG_PUSH_TOKEN: ${{ secrets.RELEASE_TAG_PUSH_TOKEN }}
           TARGET_TAG: ${{ steps.meta.outputs.tag }}
+          PRERELEASE_TAG: ${{ steps.meta.outputs.prerelease_tag }}
           STABLE_TAG: ${{ steps.meta.outputs.stable_tag }}
           LATEST_TAG: ${{ steps.meta.outputs.latest_tag }}
           UPDATE_STABLE_TAG: ${{ steps.meta.outputs.update_stable_tag }}
+          UPDATE_PRERELEASE_TAG: ${{ steps.meta.outputs.update_prerelease_tag }}
           UPDATE_LATEST_TAG: ${{ steps.meta.outputs.update_latest_tag }}
         run: |
           set -euo pipefail
@@ -145,7 +169,7 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
           PUSH_REMOTE="origin"
-          if [[ "${UPDATE_STABLE_TAG}" == "true" || "${UPDATE_LATEST_TAG}" == "true" ]]; then
+          if [[ "${UPDATE_STABLE_TAG}" == "true" || "${UPDATE_PRERELEASE_TAG}" == "true" || "${UPDATE_LATEST_TAG}" == "true" ]]; then
             if [[ -z "${RELEASE_TAG_PUSH_TOKEN:-}" ]]; then
               echo "Floating tag updates require RELEASE_TAG_PUSH_TOKEN secret (contents+workflows write)." >&2
               echo "Disable update_stable_tag/update_latest_tag for this run or add the secret." >&2
@@ -174,6 +198,10 @@ jobs:
 
           if [[ "${UPDATE_STABLE_TAG}" == "true" ]]; then
             move_tag "$STABLE_TAG"
+          fi
+
+          if [[ "${UPDATE_PRERELEASE_TAG}" == "true" ]]; then
+            move_tag "$PRERELEASE_TAG"
           fi
 
           if [[ "${UPDATE_LATEST_TAG}" == "true" ]]; then
