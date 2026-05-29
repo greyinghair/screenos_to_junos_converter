@@ -1,0 +1,153 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version (example: 1.2.3 or v1.2.3)"
+        required: true
+        type: string
+      prerelease:
+        description: "Mark this as a prerelease"
+        required: false
+        default: false
+        type: boolean
+      stable_tag:
+        description: "Floating stable tag name"
+        required: false
+        default: stable
+        type: string
+      latest_tag:
+        description: "Floating latest tag name"
+        required: false
+        default: latest
+        type: string
+      update_stable_tag:
+        description: "Move the stable floating tag to this release"
+        required: false
+        default: true
+        type: boolean
+      update_latest_tag:
+        description: "Move the latest floating tag to this release"
+        required: false
+        default: true
+        type: boolean
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve release metadata
+        id: meta
+        run: |
+          set -euo pipefail
+
+          bool_or_default() {
+            local raw="$1"
+            local fallback="$2"
+            local v="${raw:-$fallback}"
+            case "${v,,}" in
+              true|1|yes|y) echo "true" ;;
+              false|0|no|n) echo "false" ;;
+              *) echo "$fallback" ;;
+            esac
+          }
+
+          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
+            TAG="${{ github.event.inputs.version }}"
+            [[ "$TAG" =~ ^v ]] || TAG="v${TAG}"
+            [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.-]+)?$ ]] || {
+              echo "Invalid version '${TAG}'. Expected semver-like value such as v1.2.3 or v1.2.3-rc.1" >&2
+              exit 1
+            }
+
+            PRERELEASE="${{ github.event.inputs.prerelease }}"
+            STABLE_TAG="${{ github.event.inputs.stable_tag }}"
+            LATEST_TAG="${{ github.event.inputs.latest_tag }}"
+            UPDATE_STABLE_TAG="$(bool_or_default "${{ github.event.inputs.update_stable_tag }}" "true")"
+            UPDATE_LATEST_TAG="$(bool_or_default "${{ github.event.inputs.update_latest_tag }}" "true")"
+          else
+            TAG="${GITHUB_REF_NAME}"
+            if [[ "$TAG" == *-* ]]; then
+              PRERELEASE="true"
+            else
+              PRERELEASE="false"
+            fi
+
+            STABLE_TAG="stable"
+            LATEST_TAG="latest"
+            UPDATE_STABLE_TAG="true"
+            UPDATE_LATEST_TAG="true"
+
+            # Optional repository-level defaults for push-triggered releases.
+            if [[ -f ".github/release-tags.env" ]]; then
+              # shellcheck source=/dev/null
+              source .github/release-tags.env
+            fi
+
+            STABLE_TAG="${STABLE_TAG:-stable}"
+            LATEST_TAG="${LATEST_TAG:-latest}"
+            UPDATE_STABLE_TAG="$(bool_or_default "${UPDATE_STABLE_TAG:-true}" "true")"
+            UPDATE_LATEST_TAG="$(bool_or_default "${UPDATE_LATEST_TAG:-true}" "true")"
+          fi
+
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "prerelease=$PRERELEASE" >> "$GITHUB_OUTPUT"
+          echo "stable_tag=$STABLE_TAG" >> "$GITHUB_OUTPUT"
+          echo "latest_tag=$LATEST_TAG" >> "$GITHUB_OUTPUT"
+          echo "update_stable_tag=$UPDATE_STABLE_TAG" >> "$GITHUB_OUTPUT"
+          echo "update_latest_tag=$UPDATE_LATEST_TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Create or update GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.meta.outputs.tag }}
+          name: Release ${{ steps.meta.outputs.tag }}
+          generate_release_notes: true
+          prerelease: ${{ steps.meta.outputs.prerelease }}
+          make_latest: ${{ steps.meta.outputs.prerelease == 'true' && 'false' || 'true' }}
+
+      - name: Move floating tags
+        if: ${{ steps.meta.outputs.update_stable_tag == 'true' || steps.meta.outputs.update_latest_tag == 'true' }}
+        env:
+          TARGET_TAG: ${{ steps.meta.outputs.tag }}
+          STABLE_TAG: ${{ steps.meta.outputs.stable_tag }}
+          LATEST_TAG: ${{ steps.meta.outputs.latest_tag }}
+          UPDATE_STABLE_TAG: ${{ steps.meta.outputs.update_stable_tag }}
+          UPDATE_LATEST_TAG: ${{ steps.meta.outputs.update_latest_tag }}
+        run: |
+          set -euo pipefail
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          move_tag() {
+            local floating_tag="$1"
+            [[ -n "$floating_tag" ]] || return 0
+            git tag -fa "$floating_tag" "$TARGET_TAG" -m "Move $floating_tag -> $TARGET_TAG"
+            git push origin "refs/tags/$floating_tag" --force
+          }
+
+          if [[ "${UPDATE_STABLE_TAG}" == "true" ]]; then
+            move_tag "$STABLE_TAG"
+          fi
+
+          if [[ "${UPDATE_LATEST_TAG}" == "true" ]]; then
+            move_tag "$LATEST_TAG"
+          fi

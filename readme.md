@@ -119,6 +119,24 @@ python3 -m pytest -q
 
 CI also runs these checks automatically on every pull request via `.github/workflows/pr-validate.yml`. Security analysis remains in `.github/workflows/codeql-analysis.yml`.
 
+### Automated Releases
+Release automation is defined in `.github/workflows/release.yml`.
+
+- Auto release: push a version tag matching `v*.*.*` (for example `v1.4.0`).
+- Manual release: run the `Release` workflow from GitHub Actions and provide `version`.
+
+Floating tags are also maintained so you can keep stable/latest aliases up to date:
+- `stable` tag: defaults to `stable`
+- `latest` tag: defaults to `latest`
+
+For push-triggered releases, edit `.github/release-tags.env` to change defaults:
+- `STABLE_TAG` (default: `stable`)
+- `LATEST_TAG` (default: `latest`)
+- `UPDATE_STABLE_TAG` (default: `true`)
+- `UPDATE_LATEST_TAG` (default: `true`)
+
+Manual runs let you override all of these per release via workflow inputs.
+
 ### Docker
 ```bash
 docker build -f docker/Dockerfile -t screenos-to-junos .
