@@ -191,7 +191,7 @@ jobs:
           name: Release ${{ steps.meta.outputs.tag }}
           generate_release_notes: true
           prerelease: ${{ steps.meta.outputs.prerelease }}
-          make_latest: ${{ steps.meta.outputs.prerelease == 'true' && 'false' || 'true' }}
+          make_latest: ${{ steps.meta.outputs.prerelease == 'true' && 'false' || (steps.meta.outputs.update_latest_tag == 'true' && 'true' || 'false') }}
 
       - name: Move floating tags
         if: ${{ steps.meta.outputs.update_stable_tag == 'true' || steps.meta.outputs.update_prerelease_tag == 'true' || steps.meta.outputs.update_latest_tag == 'true' }}
