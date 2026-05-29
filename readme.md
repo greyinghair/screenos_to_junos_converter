@@ -35,7 +35,7 @@ Use converted output as a migration accelerator, not as an unattended full-fidel
 ```text
 .
 |-- convert.py                          # CLI entrypoint: parses args and runs conversion
-|-- readme.md                           # Project overview, usage, CI, and development guidance
+|-- readme.md                           # Project overview, usage, and development guidance
 |-- requirements.txt                    # Runtime dependencies
 |-- requirements-dev.txt                # Developer dependencies (pytest)
 |-- input/                              # Source ScreenOS configs to convert
@@ -61,10 +61,6 @@ Use converted output as a migration accelerator, not as an unattended full-fidel
 |-- scripts/                            # Local maintenance/helper scripts
 |   |-- session-close.sh                # Appends dated session handoff template
 |   `-- update-readme-tree.sh           # Regenerates this README tree section
-`-- .github/                            # Repository automation and CI config
-    `-- workflows/                      # GitHub Actions workflows
-        |-- pr-validate.yml             # PR CI: py_compile + pytest
-        `-- codeql-analysis.yml         # Security analysis workflow
 ```
 <!-- repo-tree:end -->
 
@@ -111,35 +107,6 @@ python3 -m py_compile convert.py packages/converter_core.py \
   packages/convert_service.py packages/sanity_check_naming.py
 python3 -m pytest -q
 ```
-
-### Refresh Repository Tree
-```bash
-./scripts/update-readme-tree.sh
-```
-
-CI also runs these checks automatically on every pull request via `.github/workflows/pr-validate.yml`. Security analysis remains in `.github/workflows/codeql-analysis.yml`.
-
-### Automated Releases
-Release automation is defined in `.github/workflows/release.yml`.
-
-Workflows are pinned to Node 24-compatible action majors (`actions/checkout@v6`, `actions/setup-python@v6`, `github/codeql-action@v4`, and `softprops/action-gh-release@v3`).
-
-- Auto release: push a version tag matching `v*.*.*` (for example `v1.4.0`).
-- Manual release: run the `Release` workflow from GitHub Actions and provide `version`.
-
-Floating tags are also maintained so you can keep stable/latest aliases up to date:
-- `stable` tag: defaults to `stable`
-- `latest` tag: defaults to `latest`
-
-For push-triggered releases, edit `.github/release-tags.env` to change defaults:
-- `STABLE_TAG` (default: `stable`)
-- `LATEST_TAG` (default: `latest`)
-- `UPDATE_STABLE_TAG` (default: `false`)
-- `UPDATE_LATEST_TAG` (default: `true`)
-
-Manual runs let you override all of these per release via workflow inputs.
-
-If floating tag updates target a commit that changes files under `.github/workflows/`, GitHub may reject tag pushes from the default Actions token. In that case, add repository secret `RELEASE_TAG_PUSH_TOKEN` with write access to both workflows and contents.
 
 ### Docker
 ```bash
