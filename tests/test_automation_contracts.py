@@ -53,5 +53,6 @@ def test_release_publishes_only_after_validating_the_resolved_sha() -> None:
     assert "target_sha: ${{ steps.meta.outputs.target_sha }}" in workflow
     assert "ref: ${{ needs.resolve.outputs.target_sha }}" in workflow
     assert "../validation-contract/scripts/validate.sh all" in workflow
+    assert "if: github.event_name != 'pull_request'" in workflow
     assert "contents: write" not in workflow[:publish_job]
     assert "contents: write" in workflow[publish_job:]

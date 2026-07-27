@@ -1,6 +1,13 @@
 name: Release
 
 on:
+  pull_request:
+    branches: [main]
+    paths:
+      - ".github/workflows/release.yml"
+      - "pyproject.toml"
+      - "requirements*.txt"
+      - "scripts/validate.sh"
   push:
     tags:
       - "v*.*.*"
@@ -89,6 +96,7 @@ jobs:
           EVENT_NAME: ${{ github.event_name }}
           CURRENT_SHA: ${{ github.sha }}
           CURRENT_REF_NAME: ${{ github.ref_name }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           INPUT_VERSION: ${{ inputs.version }}
           INPUT_TARGET: ${{ inputs.target_commitish }}
           INPUT_PRERELEASE: ${{ inputs.prerelease }}
@@ -143,7 +151,17 @@ jobs:
             git check-ref-format "refs/tags/$tag_name"
           }
 
-          if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
+          if [[ "$EVENT_NAME" == "pull_request" ]]; then
+            tag="validation-only"
+            requested_target="$PR_HEAD_SHA"
+            prerelease="true"
+            prerelease_tag="pre-release"
+            stable_tag="stable"
+            latest_tag="latest"
+            update_stable_tag="false"
+            update_prerelease_tag="false"
+            update_latest_tag="false"
+          elif [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
             normalized_version="${INPUT_VERSION#v}"
             normalized_version="${normalized_version#V}"
             [[ "$normalized_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.-]+)?$ ]] || {
@@ -306,6 +324,7 @@ jobs:
 
   publish:
     name: Publish validated release
+    if: github.event_name != 'pull_request'
     needs:
       - resolve
       - validate
