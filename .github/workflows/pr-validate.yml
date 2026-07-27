@@ -53,7 +53,7 @@ jobs:
 
       - name: Upload failure diagnostics
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: junit-python-${{ matrix.python-version }}-${{ github.run_attempt }}
           path: artifacts/
@@ -92,7 +92,7 @@ jobs:
 
       - name: Upload failure diagnostics
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: quality-diagnostics-${{ github.run_attempt }}
           path: artifacts/
@@ -143,7 +143,7 @@ jobs:
 
       - name: Upload failure diagnostics
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: dependencies-${{ matrix.boundary }}-${{ github.run_attempt }}
           path: artifacts/
