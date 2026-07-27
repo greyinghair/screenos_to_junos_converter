@@ -1,0 +1,9 @@
+set service "HTTPS Custom" protocol tcp src-port 0-65535 dst-port 443-443
+set address "Trust" "SRC1" 192.0.2.1 255.255.255.255
+set address "Trust" "SRC2" 192.0.2.2 255.255.255.255
+set address "Untrust" "DST1" 198.51.100.1 255.255.255.255
+set address "Untrust" "DST2" 198.51.100.2 255.255.255.255
+set policy id 7 from "Trust" to "Untrust" "SRC1" "DST1" "HTTPS Custom" permit
+set src-address "SRC2"
+set dst-address "DST2"
+set service "HTTPS Custom"

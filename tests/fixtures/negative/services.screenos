@@ -1,0 +1,3 @@
+set service "ICMP Unsupported" protocol icmp src-port 0-65535 dst-port 8-8
+set service "Reversed Source" protocol tcp src-port 1024-1 dst-port 443-443
+set service "Trailing Token" protocol tcp src-port 0-65535 dst-port 80-80 extra

@@ -115,6 +115,20 @@ RE_GROUP_ADDRESS: Final[re.Pattern[str]] = re.compile(
 RE_POLICY_DISABLE: Final[re.Pattern[str]] = re.compile(r'^set policy id \d+\s+disable\s*$')
 RE_POLICY: Final[re.Pattern[str]] = re.compile(r'^set policy id\s+\d+\s+\S')
 RE_POLICY_VALID_START: Final[re.Pattern[str]] = re.compile(r'^set policy id \d+\s+from\s+')
+RE_ADDRESS: Final[re.Pattern[str]] = re.compile(
+    r'^set address\s+"(?P<zone>[^"]+)"\s+"(?P<name>[^"]+)"\s+'
+    r'(?P<value>\S+)(?:\s+(?P<mask>\d{1,3}(?:\.\d{1,3}){3}))?'
+    r'(?:\s+"[^"]*")?\s*$',
+)
+
+
+@dataclass(frozen=True, slots=True)
+class ConversionDiagnostic:
+    """A source line that could not be represented in the generated config."""
+
+    line_number: int | None
+    line: str
+    reason: str
 
 
 @dataclass(slots=True)
@@ -133,12 +147,18 @@ class ConversionState:
 
     list_of_zones: list[str] = field(default_factory=list)
     addresses_ns_to_junos: dict[str, str] = field(default_factory=dict)
+    address_name_owners: dict[tuple[str, str], str] = field(default_factory=dict)
     address_group_ns_to_junos_address_set: dict[str, str] = field(default_factory=dict)
     address_and_set_dicts: dict[str, str] = field(default_factory=dict)
 
     multi_rule_params: list[str] = field(default_factory=list)
     converted_config: list[str] = field(default_factory=list)
     disabled_policy_id: set[str] = field(default_factory=set)
+    disabled_policy_source: dict[str, tuple[int | None, str]] = field(
+        default_factory=dict,
+    )
+    reported_disabled_policy_id: set[str] = field(default_factory=set)
+    diagnostics: list[ConversionDiagnostic] = field(default_factory=list)
 
 
 class Converter:
@@ -166,6 +186,21 @@ class Converter:
         self.state.converted_config.append(line)
         self.state.succeeded += 1
 
+    def record_failure(
+        self,
+        line: str,
+        reason: str,
+        line_number: int | None = None,
+    ) -> None:
+        self.state.failed += 1
+        self.state.diagnostics.append(
+            ConversionDiagnostic(
+                line_number=line_number,
+                line=line,
+                reason=reason,
+            ),
+        )
+
     def converted_config_output(self, output_path: Path) -> None:
         output_path.parent.mkdir(parents=True, exist_ok=True)
         output_path.write_text(
@@ -188,32 +223,37 @@ class Converter:
                     LOGGER.info("Parsing line %s", linecount)
 
                 if RE_MULTI_DST.search(line):
-                    self.multi_line_rule(line, "destination-address")
+                    self.multi_line_rule(line, "destination-address", linecount)
                 elif RE_MULTI_SRC.search(line):
-                    self.multi_line_rule(line, "source-address")
+                    self.multi_line_rule(line, "source-address", linecount)
                 elif RE_MULTI_SVC.search(line):
-                    self.multi_line_rule(line, "application")
+                    self.multi_line_rule(line, "application", linecount)
                 elif is_supported_service_definition(line):
-                    self._parse_service_line(line)
+                    self._parse_service_line(line, linecount)
                 elif RE_GROUP_SERVICE.search(line):
-                    self.create_app_set(line)
+                    self.create_app_set(line, linecount)
                 elif RE_ADDRESS_LINE.search(line):
-                    self.create_address_book(line)
+                    self.create_address_book(line, linecount)
                 elif RE_GROUP_ADDRESS.search(line):
-                    self.create_address_set(line)
+                    self.create_address_set(line, linecount)
                 elif RE_POLICY_DISABLE.search(line):
                     policy_id = re.findall(r'(\d+)', line)[0]
                     self.state.disabled_policy_id.add(policy_id)
+                    self.state.disabled_policy_source[policy_id] = (linecount, line)
                 elif RE_POLICY.search(line):
-                    self.create_rule(line)
+                    self.create_rule(line, linecount)
                 else:
-                    self.state.failed += 1
+                    self.record_failure(
+                        line,
+                        "unsupported or unrecognized syntax",
+                        linecount,
+                    )
 
-    def _parse_service_line(self, line: str) -> None:
+    def _parse_service_line(self, line: str, line_number: int | None = None) -> None:
         try:
             junos_app_name, converted_line = convert_service_in_file(line)
-        except ValueError:
-            self.state.failed += 1
+        except ValueError as exc:
+            self.record_failure(line, str(exc), line_number)
             return
 
         ns_service = re.findall(r'"([^"]*)"', line)[0]
@@ -249,12 +289,20 @@ class Converter:
 
         self.convert_config(converted_line)
 
-    def create_app_set(self, line: str) -> None:
+    def create_app_set(self, line: str, line_number: int | None = None) -> None:
         ns_group_name = re.findall(r'"([^"]*)"', line)[0]
         junos_app_set_name = sanity_check_naming(ns_group_name)
         ns_service_member = re.findall(r'"([^"]*)"', line)[1]
 
-        junos_app_name = self.state.service_dicts.get(ns_service_member, "")
+        junos_app_name = self.state.service_dicts.get(ns_service_member)
+        if junos_app_name is None:
+            self.record_failure(
+                line,
+                f'undefined service-group member: "{ns_service_member}"',
+                line_number,
+            )
+            return
+
         converted_line = (
             f"set applications application-set {junos_app_set_name} application {junos_app_name}"
         ).lower()
@@ -271,60 +319,99 @@ class Converter:
             self.state.list_of_zones.append(zone)
         return zone
 
-    def create_address_book(self, original_line: str) -> None:
-        line = re.sub(r'\s"([^"]*)"$', '', original_line)
-
-        zone = self.zone_name(line)
-        ns_address = re.findall(r'"([^"]*)"', line)[1]
-        junos_address_name = sanity_check_naming(ns_address)
-
-        self.state.addresses_ns_to_junos[ns_address] = junos_address_name
-        self.combine_dicts("address")
-
-        try:
-            intermediate_fqdn_prefix = line.split('"')[4]
-            fqdn_prefix = intermediate_fqdn_prefix.split(' ')[1]
-        except IndexError:
-            self.state.failed += 1
+    def create_address_book(
+        self,
+        original_line: str,
+        line_number: int | None = None,
+    ) -> None:
+        match = RE_ADDRESS.fullmatch(original_line)
+        if match is None:
+            self.record_failure(
+                original_line,
+                "malformed or unsupported address definition",
+                line_number,
+            )
             return
 
-        mask_list = re.findall(r'\d{1,3}(?:\.\d{1,3}){3}$', line)
-        mask = ''.join(mask_list)
+        zone = match.group("zone")
+        if zone.lower() == "management":
+            zone = "System-Management"
+        if zone not in self.state.list_of_zones:
+            self.state.list_of_zones.append(zone)
 
-        if "255" in mask:
+        ns_address = match.group("name")
+        junos_address_name = sanity_check_naming(ns_address)
+        existing_owner = self.state.address_name_owners.get((zone, junos_address_name))
+        if existing_owner is not None and existing_owner != ns_address:
+            self.record_failure(
+                original_line,
+                (
+                    f'ambiguous address name: "{ns_address}" and '
+                    f'"{existing_owner}" both normalize to "{junos_address_name}" '
+                    f"in zone {zone}"
+                ),
+                line_number,
+            )
+            return
+
+        value = match.group("value")
+        mask = match.group("mask")
+
+        if mask is not None:
             try:
-                prefix_cidr = IP(f'{fqdn_prefix}/{mask}', make_net=True)
+                prefix_cidr = IP(f'{value}/{mask}', make_net=True)
                 converted_line = (
                     f"set security zones security-zone {zone} address-book address "
                     f"{junos_address_name} {prefix_cidr}"
                 )
-                self.convert_config(converted_line)
             except ValueError:
-                self.state.failed += 1
+                self.record_failure(
+                    original_line,
+                    "invalid IPv4 address or netmask",
+                    line_number,
+                )
+                return
         else:
             try:
-                IP(fqdn_prefix, make_net=False)
+                IP(value, make_net=False)
             except ValueError:
-                fqdn = fqdn_prefix.rstrip("\n")
                 converted_line = (
                     f"set security zones security-zone {zone} address-book address "
-                    f"{junos_address_name} dns-name {fqdn}"
+                    f"{junos_address_name} dns-name {value}"
                 )
-                self.convert_config(converted_line)
+            else:
+                self.record_failure(
+                    original_line,
+                    "IPv4 address requires a dotted netmask",
+                    line_number,
+                )
+                return
 
-    def create_address_set(self, line: str) -> None:
+        self.state.addresses_ns_to_junos[ns_address] = junos_address_name
+        self.state.address_name_owners[(zone, junos_address_name)] = ns_address
+        self.combine_dicts("address")
+        self.convert_config(converted_line)
+
+    def create_address_set(self, line: str, line_number: int | None = None) -> None:
         zone = self.zone_name(line)
 
         ns_address = re.findall(r'"([^"]*)"', line)[2]
         ns_address_grp = re.findall(r'"([^"]*)"', line)[1]
 
         junos_address_set = sanity_check_naming(ns_address_grp)
+        junos_address_name = self.state.address_and_set_dicts.get(ns_address)
+        if junos_address_name is None:
+            self.record_failure(
+                line,
+                f'undefined address-group member: "{ns_address}"',
+                line_number,
+            )
+            return
+
         self.state.address_group_ns_to_junos_address_set[ns_address_grp] = junos_address_set
         self.combine_dicts("address")
 
-        junos_address_name = self.state.address_and_set_dicts.get(ns_address, "")
-
-        if junos_address_name in self.state.address_group_ns_to_junos_address_set:
+        if ns_address in self.state.address_group_ns_to_junos_address_set:
             converted_line = (
                 f"set security zones security-zone {zone} address-book address-set "
                 f"{junos_address_set} address-set {junos_address_name}"
@@ -337,19 +424,21 @@ class Converter:
 
         self.convert_config(converted_line)
 
-    def create_rule(self, line: str) -> None:
+    def create_rule(self, line: str, line_number: int | None = None) -> None:
         try:
             line = re.sub(r'(name\s\"(.+?)\"\s)', '', line)
 
             if not RE_POLICY_VALID_START.search(line):
-                self.state.failed += 1
+                self.record_failure(
+                    line,
+                    "malformed or unsupported policy definition",
+                    line_number,
+                )
                 return
 
             src_zone = self.zone_name(re.findall(r'("\S+")', line)[0])
             dst_zone = self.zone_name(re.findall(r'("\S+")', line)[1])
             policy_id = re.findall(r'(\d+)', line)[0]
-
-            self.state.multi_rule_params = [src_zone, dst_zone, policy_id]
 
             ns_src_addr = re.findall(r'"([^"]*)"', line)[2]
             src_addr = self.state.address_and_set_dicts[ns_src_addr]
@@ -361,6 +450,7 @@ class Converter:
             junos_service = self.state.service_dicts[ns_service]
 
             action = re.findall(r'\b(permit|deny)', line)[-1]
+            self.state.multi_rule_params = [src_zone, dst_zone, policy_id]
 
             rule_params = [
                 f'match source-address {src_addr}',
@@ -377,9 +467,18 @@ class Converter:
                 self.convert_config(converted_line)
 
         except (IndexError, KeyError, ValueError):
-            self.state.failed += 1
+            self.record_failure(
+                line,
+                "malformed policy or unresolved object reference",
+                line_number,
+            )
 
-    def multi_line_rule(self, line: str, line_type: str) -> None:
+    def multi_line_rule(
+        self,
+        line: str,
+        line_type: str,
+        line_number: int | None = None,
+    ) -> None:
         argument = re.findall(r'"([^"]*)"', line)[0]
         src_dst_or_service = re.findall(r'(.+)', line_type)[0]
 
@@ -397,7 +496,11 @@ class Converter:
             )
             self.convert_config(converted_line)
         except (IndexError, KeyError):
-            self.state.failed += 1
+            self.record_failure(
+                line,
+                "policy continuation has no resolvable base policy or object",
+                line_number,
+            )
 
     def disabled_rule_cleanup(self) -> None:
         if not self.state.disabled_policy_id:
@@ -418,4 +521,16 @@ class Converter:
 
         self.state.converted_config = kept_lines
         self.state.succeeded = max(0, self.state.succeeded - removed_count)
-        self.state.failed += len(self.state.disabled_policy_id)
+        for policy_id in sorted(self.state.disabled_policy_id):
+            if policy_id in self.state.reported_disabled_policy_id:
+                continue
+            line_number, line = self.state.disabled_policy_source.get(
+                policy_id,
+                (None, f"set policy id {policy_id} disable"),
+            )
+            self.record_failure(
+                line,
+                f"disabled policy {policy_id} omitted from output",
+                line_number,
+            )
+            self.state.reported_disabled_policy_id.add(policy_id)

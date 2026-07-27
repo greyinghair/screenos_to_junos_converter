@@ -1,0 +1,10 @@
+set applications application udp_161 protocol udp destination-port 161
+set applications application-set junos-dns application junos-dns-udp
+set applications application-set junos-dns application junos-dns-tcp
+set applications application tcp_8443 protocol tcp destination-port 8443
+set applications application udp_5000-5002 protocol udp destination-port 5000-5002
+set applications application udp_53 protocol udp destination-port 53
+set applications application-set dual_dns_group application udp_53
+set applications application-set dual_dns_group application tcp_53
+set applications application tcp_53 protocol tcp destination-port 53
+set applications application-set web_bundle application tcp_8443

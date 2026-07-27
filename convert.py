@@ -69,6 +69,13 @@ def main() -> int:
     converter.converted_config_output(output_path)
 
     elapsed = time.perf_counter() - start_time
+    for diagnostic in converter.state.diagnostics:
+        location = (
+            f"line {diagnostic.line_number}"
+            if diagnostic.line_number is not None
+            else "unknown line"
+        )
+        LOGGER.warning("%s not converted: %s", location, diagnostic.reason)
     LOGGER.info("number of lines converted: %s", converter.state.succeeded)
     LOGGER.info("number of lines NOT converted: %s", converter.state.failed)
     LOGGER.info("output file: %s", output_path)

@@ -30,15 +30,15 @@ turning an assumption into a migration guarantee.
 
 | ScreenOS input contract | Junos output hierarchy | Status and limits | Regression coverage |
 | --- | --- | --- | --- |
-| `set service "NAME" protocol (tcp\|udp) src-port START-END dst-port START-END [timeout N]` | `set applications application PROTOCOL_PORT[-END] protocol PROTOCOL destination-port START[-END]` | **Supported.** Only TCP and UDP numeric port ranges are accepted. Source ports are validated but not rendered by the current model. | `tests/test_convert_service.py` |
-| `set service "NAME" + (tcp\|udp) src-port START-END dst-port START-END` | Custom application plus a generated application set | **Assumption.** Multiple-server service variants need more source fixtures before extension. | Existing smoke coverage |
-| `set group service "GROUP" add "MEMBER"` | `set applications application-set GROUP application MEMBER` | **Supported.** Quoted names may contain spaces; the member must be defined first. | `tests/test_converter_syntax_coverage.py` |
-| `set address "ZONE" "NAME" IPV4 NETMASK` | `set security zones security-zone ZONE address-book address NAME PREFIX` | **Supported, limited to dotted IPv4/netmask input.** CIDR, IPv6, wildcard, and range forms are unsupported. | Smoke and syntax-coverage tests |
-| `set address "ZONE" "NAME" FQDN` | `set security zones security-zone ZONE address-book address NAME dns-name FQDN` | **Assumption.** A non-IP value is treated as a DNS name; add a verified FQDN fixture before broadening this path. | Add with the next FQDN change |
-| `set group address "ZONE" "GROUP" add "MEMBER"` | Zone address-set entry | **Supported.** Nested sets are emitted when a previously recognized member is a set. | `tests/test_converter_syntax_coverage.py` |
-| `set policy id NUMBER from "FROM" to "TO" "SRC" "DST" "SERVICE" (permit\|deny)` | `set security policies from-zone FROM to-zone TO policy NUMBER match …` and `then permit\|deny` | **Supported base policy only.** Numeric IDs and permit/deny are the current boundary. | `tests/test_converter_smoke.py` |
-| `set src-address "NAME"`, `set dst-address "NAME"`, or `set service "NAME"` immediately after a base policy | Additional policy match statement | **Supported.** Continuations are stateful and must follow a successfully parsed base policy. | `tests/test_converter_syntax_coverage.py` |
-| `set policy id NUMBER disable` | Removes the converted statements for that numeric policy | **Supported.** The converter intentionally omits disabled policies rather than rendering them disabled. | `tests/test_converter_syntax_coverage.py` |
+| `set service "NAME" protocol (tcp\|udp) src-port START-END dst-port START-END [timeout N]` | `set applications application PROTOCOL_PORT[-END] protocol PROTOCOL destination-port START[-END]` | **Supported.** Only TCP and UDP numeric port ranges are accepted. Source ports are validated but not rendered by the current model. | Unit tests plus `fixtures/features/services.screenos` |
+| `set service "NAME" + (tcp\|udp) src-port START-END dst-port START-END` | Custom application plus a generated application set | **Assumption.** Multiple-server service variants need more source fixtures before extension. | Services and end-to-end fixtures |
+| `set group service "GROUP" add "MEMBER"` | `set applications application-set GROUP application MEMBER` | **Supported.** Quoted names may contain spaces; the member must be defined first. | Services and negative-reference fixtures |
+| `set address "ZONE" "NAME" IPV4 NETMASK` | `set security zones security-zone ZONE address-book address NAME PREFIX` | **Supported, limited to dotted IPv4/netmask input.** CIDR, IPv6, wildcard, and range forms are unsupported. | Address and negative-address fixtures |
+| `set address "ZONE" "NAME" FQDN` | `set security zones security-zone ZONE address-book address NAME dns-name FQDN` | **Assumption.** A non-IP value is treated as a DNS name; broaden only with vendor-validated syntax. | Address and end-to-end fixtures |
+| `set group address "ZONE" "GROUP" add "MEMBER"` | Zone address-set entry | **Supported.** Nested sets are emitted when a previously recognized member is a set. | Address and negative-reference fixtures |
+| `set policy id NUMBER from "FROM" to "TO" "SRC" "DST" "SERVICE" (permit\|deny)` | `set security policies from-zone FROM to-zone TO policy NUMBER match …` and `then permit\|deny` | **Supported base policy only.** Numeric IDs and permit/deny are the current boundary. | Policy, negative-reference, and end-to-end fixtures |
+| `set src-address "NAME"`, `set dst-address "NAME"`, or `set service "NAME"` immediately after a base policy | Additional policy match statement | **Supported.** Continuations are stateful and must follow a successfully parsed base policy. | Policy, negative-reference, and end-to-end fixtures |
+| `set policy id NUMBER disable` | Removes the converted statements for that numeric policy | **Supported.** The converter intentionally omits disabled policies rather than rendering them disabled. | Syntax-coverage and end-to-end tests |
 
 ## Explicitly unsupported work
 
@@ -57,3 +57,8 @@ turning an assumption into a migration guarantee.
 3. Assert generated output, conversion counts, and diagnostic behaviour.
 4. Keep recognition strict enough that unknown syntax is counted as unconverted.
 5. Keep production addresses, credentials, and customer configuration out of fixtures.
+
+Feature implementation and its fixtures must land in the same pull request.
+`tests/test_validation_fixtures.py` validates exact output and deterministic
+ordering for the supported-feature and end-to-end fixtures, and validates
+line-specific reasons for unsupported input.

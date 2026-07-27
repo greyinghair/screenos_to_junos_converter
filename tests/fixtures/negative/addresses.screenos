@@ -1,0 +1,5 @@
+set address "Trust" "Missing Mask" 192.0.2.10
+set address "Trust" "Invalid Address" 999.999.999.999 255.255.255.0
+set address "Trust" "Missing Value"
+set address "Trust" "Web App" 192.0.2.20 255.255.255.255
+set address "Trust" "Web-App" 192.0.2.21 255.255.255.255
