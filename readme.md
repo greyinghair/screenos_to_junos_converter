@@ -1,5 +1,9 @@
 # ScreenOS to Junos Converter
 
+[![Python 3.12](https://img.shields.io/github/check-runs/greyinghair/screenos_to_junos_converter/main?nameFilter=Python%203.12&label=Python%203.12&logo=python)](https://github.com/greyinghair/screenos_to_junos_converter/actions/workflows/pr-validate.yml?query=branch%3Amain)
+[![Python 3.13](https://img.shields.io/github/check-runs/greyinghair/screenos_to_junos_converter/main?nameFilter=Python%203.13&label=Python%203.13&logo=python)](https://github.com/greyinghair/screenos_to_junos_converter/actions/workflows/pr-validate.yml?query=branch%3Amain)
+[![Python 3.14](https://img.shields.io/github/check-runs/greyinghair/screenos_to_junos_converter/main?nameFilter=Python%203.14&label=Python%203.14&logo=python)](https://github.com/greyinghair/screenos_to_junos_converter/actions/workflows/pr-validate.yml?query=branch%3Amain)
+
 This repository converts selected Juniper ScreenOS configuration objects into Junos SRX `set` commands to help with migration projects.
 
 ## What It Converts
