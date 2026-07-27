@@ -60,6 +60,26 @@ def test_ci_aggregate_requires_quality_and_dependency_boundaries() -> None:
     assert "DEPENDENCY_RESULT: ${{ needs.dependency_boundaries.result }}" in workflow
 
 
+def test_prerelease_canary_is_scheduled_non_blocking_and_actionable() -> None:
+    workflow = read_repo_file(".github/workflows/prerelease-canary.yml")
+    triggers = workflow[: workflow.index("\npermissions:")]
+
+    assert "\n  schedule:" in triggers
+    assert "\n  workflow_dispatch:" in triggers
+    assert "\n  pull_request:" not in triggers
+    assert "\n  push:" not in triggers
+    assert "python_prerelease:" in workflow
+    assert "pytest_prerelease:" in workflow
+    assert 'python-version: "3.15"' in workflow
+    assert "allow-prereleases: true" in workflow
+    assert "python -m pip install --upgrade --pre pytest" in workflow
+    assert workflow.count("scripts/validate.sh test") == 2
+    assert workflow.count("if: failure()") == 2
+    assert workflow.count('"$GITHUB_STEP_SUMMARY"') == 2
+    assert workflow.count("python --version") == 2
+    assert workflow.count("python -m pytest --version") == 2
+
+
 def test_dependency_review_and_dependabot_cover_the_declared_policy() -> None:
     dependency_review = read_repo_file(".github/workflows/dependency-review.yml")
     dependabot = read_repo_file(".github/dependabot.yml")
@@ -86,6 +106,25 @@ def test_dependency_constraints_pin_both_supported_boundaries() -> None:
             <= numeric_version(latest[package])
             < numeric_version(ceiling)
         )
+
+
+def test_readme_unsupported_issues_match_the_support_matrix() -> None:
+    readme = read_repo_file("readme.md")
+    support_matrix = read_repo_file("docs/conversion-support-matrix.md")
+
+    readme_section = readme[
+        readme.index("## What It Does Not Convert") : readme.index("## Python Version")
+    ]
+    matrix_section = support_matrix[
+        support_matrix.index("## Explicitly unsupported work") : support_matrix.index(
+            "## Contribution checklist"
+        )
+    ]
+
+    readme_issues = set(re.findall(r"issues/(\d+)", readme_section))
+    matrix_issues = set(re.findall(r"#(\d+)", matrix_section))
+
+    assert readme_issues == matrix_issues
 
 
 def test_release_publishes_only_after_validating_the_resolved_sha() -> None:

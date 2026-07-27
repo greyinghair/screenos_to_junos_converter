@@ -53,6 +53,7 @@ trap 'rm -f "$TREE_BLOCK_FILE" "$OUTPUT_FILE"' EXIT
     echo '|-- docs/                               # Vendor reference docs'
     [ -f docs/readme.md ] && echo '|   |-- readme.md                       # Notes on bundled vendor documentation'
     [ -f docs/dependency-policy.md ] && echo '|   |-- dependency-policy.md            # Version, quality, and security policy'
+    [ -f docs/conversion-support-matrix.md ] && echo '|   |-- conversion-support-matrix.md    # Accepted grammar and known limitations'
     [ -d docs/screenos ] && echo '|   |-- screenos/                       # ScreenOS command references'
     [ -d docs/junos ] && echo '|   `-- junos/                          # Junos command references'
   fi
@@ -92,6 +93,7 @@ trap 'rm -f "$TREE_BLOCK_FILE" "$OUTPUT_FILE"' EXIT
     if [ -d .github/workflows ]; then
       echo '    `-- workflows/                      # GitHub Actions workflows'
       [ -f .github/workflows/pr-validate.yml ] && echo '        |-- pr-validate.yml             # Required Python and quality CI'
+      [ -f .github/workflows/prerelease-canary.yml ] && echo '        |-- prerelease-canary.yml       # Non-blocking Python/pytest canaries'
       [ -f .github/workflows/codeql-analysis.yml ] && echo '        |-- codeql-analysis.yml         # Security analysis workflow'
       [ -f .github/workflows/dependency-review.yml ] && echo '        |-- dependency-review.yml       # Vulnerable dependency gate'
       [ -f .github/workflows/release.yml ] && echo '        `-- release.yml                 # Validated release publishing'

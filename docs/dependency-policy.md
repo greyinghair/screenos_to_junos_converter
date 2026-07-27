@@ -6,12 +6,10 @@ The primary CI matrix runs the required test suite on Python 3.12, 3.13, and
 3.14. The stable `required` job succeeds only after that matrix, code-quality
 validation, coverage, and both dependency-boundary jobs pass.
 
-Direct development dependencies declare an inclusive floor and exclusive major
-ceiling in `requirements-dev.txt`:
-
-- pytest 9.0.3 through the latest compatible 9.x release
-- pytest-cov 7.0.0 through the latest compatible 7.x release
-- Ruff 0.15.0 through the latest compatible pre-1.0 release
+Direct development dependencies declare an inclusive floor and exclusive
+ceiling in `requirements-dev.txt`. That file is the executable source of truth
+for the current supported ranges; the exact values are intentionally not
+duplicated here because Dependabot updates them.
 
 `requirements-dev-minimum.txt` pins every declared floor.
 `requirements-dev-latest.txt` pins the latest versions validated when the file
@@ -19,6 +17,19 @@ was updated. Their root-level names make them discoverable by Dependabot. A
 floor changes only when the project intentionally adopts behavior unavailable
 in the old floor; a ceiling changes only after the next major line passes the
 full validation contract.
+
+## Prerelease canaries
+
+The scheduled `prerelease-canary.yml` workflow runs every Monday and can also be
+started manually. One independent job tests the next Python prerelease
+(currently Python 3.15); another installs the newest resolvable pytest
+prerelease on the newest supported Python. Both use `scripts/validate.sh test`,
+record the resolved Python and package versions in the workflow summary, and
+retain failure artifacts for 14 days.
+
+The canary has no `push` or `pull_request` trigger, so it cannot become a
+required check for ordinary changes. A prerelease is promoted only through an
+explicit update to the supported CI matrix, dependency policy, and README.
 
 ## Quality and coverage
 
