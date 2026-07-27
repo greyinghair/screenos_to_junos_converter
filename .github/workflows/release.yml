@@ -1,6 +1,13 @@
 name: Release
 
 on:
+  pull_request:
+    branches: [main]
+    paths:
+      - ".github/workflows/release.yml"
+      - "pyproject.toml"
+      - "requirements*.txt"
+      - "scripts/validate.sh"
   push:
     tags:
       - "v*.*.*"
@@ -52,33 +59,61 @@ on:
         type: boolean
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
-  publish:
+  resolve:
+    name: Resolve release target
     runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      tag: ${{ steps.meta.outputs.tag }}
+      requested_target: ${{ steps.meta.outputs.requested_target }}
+      target_sha: ${{ steps.meta.outputs.target_sha }}
+      prerelease: ${{ steps.meta.outputs.prerelease }}
+      prerelease_tag: ${{ steps.meta.outputs.prerelease_tag }}
+      stable_tag: ${{ steps.meta.outputs.stable_tag }}
+      latest_tag: ${{ steps.meta.outputs.latest_tag }}
+      update_stable_tag: ${{ steps.meta.outputs.update_stable_tag }}
+      update_prerelease_tag: ${{ steps.meta.outputs.update_prerelease_tag }}
+      update_latest_tag: ${{ steps.meta.outputs.update_latest_tag }}
+      make_latest: ${{ steps.meta.outputs.make_latest }}
 
     steps:
-      - name: Checkout
+      - name: Checkout release workflow source
         uses: actions/checkout@v6
         with:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Resolve release metadata
+      - name: Resolve immutable release metadata
         id: meta
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          CURRENT_SHA: ${{ github.sha }}
+          CURRENT_REF_NAME: ${{ github.ref_name }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          INPUT_VERSION: ${{ inputs.version }}
+          INPUT_TARGET: ${{ inputs.target_commitish }}
+          INPUT_PRERELEASE: ${{ inputs.prerelease }}
+          INPUT_PRERELEASE_TAG: ${{ inputs.prerelease_tag }}
+          INPUT_STABLE_TAG: ${{ inputs.stable_tag }}
+          INPUT_LATEST_TAG: ${{ inputs.latest_tag }}
+          INPUT_UPDATE_STABLE: ${{ inputs.update_stable_tag }}
+          INPUT_UPDATE_PRERELEASE: ${{ inputs.update_prerelease_tag }}
+          INPUT_UPDATE_LATEST: ${{ inputs.update_latest_tag }}
         run: |
           set -euo pipefail
 
           bool_or_default() {
             local raw="$1"
             local fallback="$2"
-            local v="${raw:-$fallback}"
-            case "${v,,}" in
+            local value="${raw:-$fallback}"
+            case "${value,,}" in
               true|1|yes|y) echo "true" ;;
               false|0|no|n) echo "false" ;;
               *) echo "$fallback" ;;
@@ -86,19 +121,22 @@ jobs:
           }
 
           resolve_commitish() {
-            local c="$1"
+            local requested="$1"
 
-            if git rev-parse --verify "${c}^{commit}" >/dev/null 2>&1; then
-              git rev-parse --verify "${c}^{commit}"
+            [[ "$requested" =~ ^[0-9A-Za-z][0-9A-Za-z._/-]*$ ]] || return 1
+            [[ "$requested" != *..* && "$requested" != *@\{* ]] || return 1
+
+            if git rev-parse --verify --end-of-options "${requested}^{commit}" >/dev/null 2>&1; then
+              git rev-parse --verify --end-of-options "${requested}^{commit}"
               return 0
             fi
 
-            if git rev-parse --verify "origin/${c}^{commit}" >/dev/null 2>&1; then
-              git rev-parse --verify "origin/${c}^{commit}"
+            if git rev-parse --verify --end-of-options "origin/${requested}^{commit}" >/dev/null 2>&1; then
+              git rev-parse --verify --end-of-options "origin/${requested}^{commit}"
               return 0
             fi
 
-            git fetch --no-tags origin "$c" >/dev/null 2>&1 || true
+            git fetch --no-tags origin "$requested" >/dev/null 2>&1 || true
             if git rev-parse --verify "FETCH_HEAD^{commit}" >/dev/null 2>&1; then
               git rev-parse --verify "FETCH_HEAD^{commit}"
               return 0
@@ -107,215 +145,338 @@ jobs:
             return 1
           }
 
-          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
-            RAW_VERSION="${{ github.event.inputs.version }}"
-            # Accept either 1.2.3 / 1.2.3-rc.1 or v1.2.3 / V1.2.3-rc.1.
-            NORMALIZED_VERSION="${RAW_VERSION#v}"
-            NORMALIZED_VERSION="${NORMALIZED_VERSION#V}"
+          validate_tag_name() {
+            local tag_name="$1"
+            [[ -n "$tag_name" && "$tag_name" != -* ]] || return 1
+            git check-ref-format "refs/tags/$tag_name"
+          }
 
-            [[ "$NORMALIZED_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.-]+)?$ ]] || {
-              echo "Invalid version '${RAW_VERSION}'. Expected semver-like value such as 1.2.3, v1.2.3, or v1.2.3-rc.1" >&2
+          if [[ "$EVENT_NAME" == "pull_request" ]]; then
+            tag="validation-only"
+            requested_target="$PR_HEAD_SHA"
+            prerelease="true"
+            prerelease_tag="pre-release"
+            stable_tag="stable"
+            latest_tag="latest"
+            update_stable_tag="false"
+            update_prerelease_tag="false"
+            update_latest_tag="false"
+          elif [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
+            normalized_version="${INPUT_VERSION#v}"
+            normalized_version="${normalized_version#V}"
+            [[ "$normalized_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.-]+)?$ ]] || {
+              echo "Invalid version '$INPUT_VERSION'." >&2
               exit 1
             }
 
-            TAG="v${NORMALIZED_VERSION}"
-            TARGET_COMMITISH="${{ github.event.inputs.target_commitish }}"
-            TARGET_COMMITISH="${TARGET_COMMITISH:-${GITHUB_SHA}}"
-
-            PRERELEASE="${{ github.event.inputs.prerelease }}"
-            PRERELEASE_TAG="${{ github.event.inputs.prerelease_tag }}"
-            STABLE_TAG="${{ github.event.inputs.stable_tag }}"
-            LATEST_TAG="${{ github.event.inputs.latest_tag }}"
-            UPDATE_STABLE_TAG="$(bool_or_default "${{ github.event.inputs.update_stable_tag }}" "true")"
-            UPDATE_PRERELEASE_TAG="$(bool_or_default "${{ github.event.inputs.update_prerelease_tag }}" "false")"
-            UPDATE_LATEST_TAG="$(bool_or_default "${{ github.event.inputs.update_latest_tag }}" "true")"
-            
-            if [[ "$PRERELEASE" != "true" ]]; then
-              UPDATE_PRERELEASE_TAG="false"
-            fi
+            tag="v${normalized_version}"
+            requested_target="${INPUT_TARGET:-$CURRENT_SHA}"
+            prerelease="$(bool_or_default "$INPUT_PRERELEASE" "false")"
+            prerelease_tag="${INPUT_PRERELEASE_TAG:-pre-release}"
+            stable_tag="${INPUT_STABLE_TAG:-stable}"
+            latest_tag="${INPUT_LATEST_TAG:-latest}"
+            update_stable_tag="$(bool_or_default "$INPUT_UPDATE_STABLE" "false")"
+            update_prerelease_tag="$(bool_or_default "$INPUT_UPDATE_PRERELEASE" "false")"
+            update_latest_tag="$(bool_or_default "$INPUT_UPDATE_LATEST" "true")"
           else
-            TAG="${GITHUB_REF_NAME}"
-            TARGET_COMMITISH="${GITHUB_SHA}"
-            if [[ "$TAG" == *-* ]]; then
-              PRERELEASE="true"
+            tag="$CURRENT_REF_NAME"
+            requested_target="$CURRENT_REF_NAME"
+            if [[ "$tag" == *-* ]]; then
+              prerelease="true"
             else
-              PRERELEASE="false"
+              prerelease="false"
             fi
 
-            PRERELEASE_TAG="pre-release"
-            STABLE_TAG="stable"
-            LATEST_TAG="latest"
-            UPDATE_STABLE_TAG="true"
-            UPDATE_PRERELEASE_TAG="true"
-            UPDATE_LATEST_TAG="true"
+            prerelease_tag="pre-release"
+            stable_tag="stable"
+            latest_tag="latest"
+            update_stable_tag="true"
+            update_prerelease_tag="true"
+            update_latest_tag="true"
 
-            # Optional repository-level defaults for push-triggered releases.
             if [[ -f ".github/release-tags.env" ]]; then
               # shellcheck source=/dev/null
               source .github/release-tags.env
             fi
 
-            PRERELEASE_TAG="${PRERELEASE_TAG:-pre-release}"
-            STABLE_TAG="${STABLE_TAG:-stable}"
-            LATEST_TAG="${LATEST_TAG:-latest}"
-            UPDATE_STABLE_TAG="$(bool_or_default "${UPDATE_STABLE_TAG:-true}" "true")"
-            UPDATE_PRERELEASE_TAG="$(bool_or_default "${UPDATE_PRERELEASE_TAG:-true}" "true")"
-            UPDATE_LATEST_TAG="$(bool_or_default "${UPDATE_LATEST_TAG:-true}" "true")"
-
-            if [[ "$PRERELEASE" != "true" ]]; then
-              UPDATE_PRERELEASE_TAG="false"
-            fi
+            prerelease_tag="${PRERELEASE_TAG:-$prerelease_tag}"
+            stable_tag="${STABLE_TAG:-$stable_tag}"
+            latest_tag="${LATEST_TAG:-$latest_tag}"
+            update_stable_tag="$(bool_or_default "${UPDATE_STABLE_TAG:-$update_stable_tag}" "true")"
+            update_prerelease_tag="$(bool_or_default "${UPDATE_PRERELEASE_TAG:-$update_prerelease_tag}" "true")"
+            update_latest_tag="$(bool_or_default "${UPDATE_LATEST_TAG:-$update_latest_tag}" "true")"
           fi
 
-          if ! TARGET_COMMITISH="$(resolve_commitish "$TARGET_COMMITISH")"; then
-            echo "Invalid target_commitish '${TARGET_COMMITISH}'. Provide a valid commit SHA, branch, or tag." >&2
+          if [[ "$prerelease" != "true" ]]; then
+            update_prerelease_tag="false"
+          fi
+
+          for tag_name in "$tag" "$prerelease_tag" "$stable_tag" "$latest_tag"; do
+            if ! validate_tag_name "$tag_name"; then
+              echo "Invalid tag name '$tag_name'." >&2
+              exit 1
+            fi
+          done
+
+          if ! target_sha="$(resolve_commitish "$requested_target")"; then
+            echo "Invalid target_commitish '$requested_target'." >&2
             exit 1
           fi
 
-          # GitHub "Latest" designation is separate from floating tags.
-          if [[ "$PRERELEASE" == "true" ]]; then
-            MAKE_LATEST="false"
-          elif [[ "$UPDATE_LATEST_TAG" == "true" ]]; then
-            MAKE_LATEST="true"
+          if [[ "$prerelease" == "true" ]]; then
+            make_latest="false"
+          elif [[ "$update_latest_tag" == "true" ]]; then
+            make_latest="true"
           else
-            MAKE_LATEST="false"
+            make_latest="false"
           fi
 
-          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
-          echo "target_commitish=$TARGET_COMMITISH" >> "$GITHUB_OUTPUT"
-          echo "prerelease=$PRERELEASE" >> "$GITHUB_OUTPUT"
-          echo "prerelease_tag=$PRERELEASE_TAG" >> "$GITHUB_OUTPUT"
-          echo "stable_tag=$STABLE_TAG" >> "$GITHUB_OUTPUT"
-          echo "latest_tag=$LATEST_TAG" >> "$GITHUB_OUTPUT"
-          echo "update_stable_tag=$UPDATE_STABLE_TAG" >> "$GITHUB_OUTPUT"
-          echo "update_prerelease_tag=$UPDATE_PRERELEASE_TAG" >> "$GITHUB_OUTPUT"
-          echo "update_latest_tag=$UPDATE_LATEST_TAG" >> "$GITHUB_OUTPUT"
-          echo "make_latest=$MAKE_LATEST" >> "$GITHUB_OUTPUT"
+          {
+            echo "tag=$tag"
+            echo "requested_target=$requested_target"
+            echo "target_sha=$target_sha"
+            echo "prerelease=$prerelease"
+            echo "prerelease_tag=$prerelease_tag"
+            echo "stable_tag=$stable_tag"
+            echo "latest_tag=$latest_tag"
+            echo "update_stable_tag=$update_stable_tag"
+            echo "update_prerelease_tag=$update_prerelease_tag"
+            echo "update_latest_tag=$update_latest_tag"
+            echo "make_latest=$make_latest"
+          } >> "$GITHUB_OUTPUT"
 
-          echo "Resolved release metadata:"
-          echo "  tag=$TAG"
-          echo "  target_commitish=$TARGET_COMMITISH"
-          echo "  prerelease=$PRERELEASE"
-          echo "  update_stable_tag=$UPDATE_STABLE_TAG"
-          echo "  update_prerelease_tag=$UPDATE_PRERELEASE_TAG"
-          echo "  update_latest_tag=$UPDATE_LATEST_TAG"
-          echo "  make_latest=$MAKE_LATEST"
+          {
+            echo "## Resolved release target"
+            echo
+            echo "- Requested target: \`$requested_target\`"
+            echo "- Immutable SHA: \`$target_sha\`"
+            echo "- Release tag: \`$tag\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  validate:
+    name: Validate release target
+    needs: resolve
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout current validation contract
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          path: validation-contract
+          persist-credentials: false
+
+      - name: Checkout resolved release target
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.resolve.outputs.target_sha }}
+          path: target
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.14"
+          cache: pip
+          cache-dependency-path: |
+            target/requirements.txt
+            validation-contract/requirements-dev.txt
+            validation-contract/requirements-dev-latest.txt
+
+      - name: Install validation environment
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install \
+            -r target/requirements.txt \
+            -r validation-contract/requirements-dev.txt \
+            -c validation-contract/requirements-dev-latest.txt
+          python -m pip check
+
+      - name: Run the required validation contract
+        working-directory: target
+        run: ../validation-contract/scripts/validate.sh all
+
+      - name: Upload failed release validation diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-validation-${{ needs.resolve.outputs.target_sha }}
+          path: target/artifacts/
+          if-no-files-found: warn
+
+      - name: Record validation result
+        if: always()
+        env:
+          REQUESTED_TARGET: ${{ needs.resolve.outputs.requested_target }}
+          TARGET_SHA: ${{ needs.resolve.outputs.target_sha }}
+          VALIDATION_RESULT: ${{ job.status }}
+        run: |
+          {
+            echo "## Release validation"
+            echo
+            echo "- Requested target: \`$REQUESTED_TARGET\`"
+            echo "- Tested SHA: \`$TARGET_SHA\`"
+            echo "- Result: **$VALIDATION_RESULT**"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  publish:
+    name: Publish validated release
+    if: github.event_name != 'pull_request'
+    needs:
+      - resolve
+      - validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout tested commit
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.resolve.outputs.target_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Create or verify immutable version tag
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PUSH_TOKEN: ${{ github.token }}
+          TARGET_SHA: ${{ needs.resolve.outputs.target_sha }}
+          TARGET_TAG: ${{ needs.resolve.outputs.tag }}
+        run: |
+          set -euo pipefail
+
+          checked_out_sha="$(git rev-parse HEAD)"
+          [[ "$checked_out_sha" == "$TARGET_SHA" ]] || {
+            echo "Checkout mismatch: expected $TARGET_SHA, got $checked_out_sha." >&2
+            exit 1
+          }
+
+          if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git tag -f -a -m "Release $TARGET_TAG ($TARGET_SHA)" \
+              -- "$TARGET_TAG" "$TARGET_SHA"
+            push_remote="https://x-access-token:${PUSH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+            git push "$push_remote" "refs/tags/$TARGET_TAG" --force
+          fi
+
+          remote_sha="$(git ls-remote --tags origin "refs/tags/${TARGET_TAG}^{}" | awk '{print $1}')"
+          if [[ -z "$remote_sha" ]]; then
+            remote_sha="$(git ls-remote --tags origin "refs/tags/${TARGET_TAG}" | awk '{print $1}')"
+          fi
+          [[ "$remote_sha" == "$TARGET_SHA" ]] || {
+            echo "Release tag $TARGET_TAG points to $remote_sha, expected $TARGET_SHA." >&2
+            exit 1
+          }
 
       - name: Create or update GitHub release
         uses: softprops/action-gh-release@v3
         with:
-          token: ${{ secrets.RELEASE_TAG_PUSH_TOKEN != '' && secrets.RELEASE_TAG_PUSH_TOKEN || github.token }}
-          tag_name: ${{ steps.meta.outputs.tag }}
-          target_commitish: ${{ steps.meta.outputs.target_commitish }}
-          name: Release ${{ steps.meta.outputs.tag }}
+          token: ${{ github.token }}
+          tag_name: ${{ needs.resolve.outputs.tag }}
+          target_commitish: ${{ needs.resolve.outputs.target_sha }}
+          name: Release ${{ needs.resolve.outputs.tag }}
           generate_release_notes: true
-          prerelease: ${{ steps.meta.outputs.prerelease }}
-          make_latest: ${{ steps.meta.outputs.make_latest }}
+          prerelease: ${{ needs.resolve.outputs.prerelease }}
+          make_latest: ${{ needs.resolve.outputs.make_latest }}
 
-      - name: Move floating tags
-        if: ${{ steps.meta.outputs.update_stable_tag == 'true' || steps.meta.outputs.update_prerelease_tag == 'true' || steps.meta.outputs.update_latest_tag == 'true' }}
+      - name: Move floating tags to the tested SHA
+        if: ${{ needs.resolve.outputs.update_stable_tag == 'true' || needs.resolve.outputs.update_prerelease_tag == 'true' || needs.resolve.outputs.update_latest_tag == 'true' }}
         env:
-          RELEASE_TAG_PUSH_TOKEN: ${{ secrets.RELEASE_TAG_PUSH_TOKEN }}
-          TARGET_COMMITISH: ${{ steps.meta.outputs.target_commitish }}
-          TARGET_TAG: ${{ steps.meta.outputs.tag }}
-          PRERELEASE_TAG: ${{ steps.meta.outputs.prerelease_tag }}
-          STABLE_TAG: ${{ steps.meta.outputs.stable_tag }}
-          LATEST_TAG: ${{ steps.meta.outputs.latest_tag }}
-          UPDATE_STABLE_TAG: ${{ steps.meta.outputs.update_stable_tag }}
-          UPDATE_PRERELEASE_TAG: ${{ steps.meta.outputs.update_prerelease_tag }}
-          UPDATE_LATEST_TAG: ${{ steps.meta.outputs.update_latest_tag }}
+          PUSH_TOKEN: ${{ secrets.RELEASE_TAG_PUSH_TOKEN != '' && secrets.RELEASE_TAG_PUSH_TOKEN || github.token }}
+          TARGET_SHA: ${{ needs.resolve.outputs.target_sha }}
+          TARGET_TAG: ${{ needs.resolve.outputs.tag }}
+          PRERELEASE_TAG: ${{ needs.resolve.outputs.prerelease_tag }}
+          STABLE_TAG: ${{ needs.resolve.outputs.stable_tag }}
+          LATEST_TAG: ${{ needs.resolve.outputs.latest_tag }}
+          UPDATE_STABLE_TAG: ${{ needs.resolve.outputs.update_stable_tag }}
+          UPDATE_PRERELEASE_TAG: ${{ needs.resolve.outputs.update_prerelease_tag }}
+          UPDATE_LATEST_TAG: ${{ needs.resolve.outputs.update_latest_tag }}
         run: |
           set -euo pipefail
 
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-
-          PUSH_REMOTE="origin"
-          if [[ "${UPDATE_STABLE_TAG}" == "true" || "${UPDATE_PRERELEASE_TAG}" == "true" || "${UPDATE_LATEST_TAG}" == "true" ]]; then
-            if [[ -z "${RELEASE_TAG_PUSH_TOKEN:-}" ]]; then
-              echo "Floating tag updates require RELEASE_TAG_PUSH_TOKEN secret (contents+workflows write)." >&2
-              echo "Disable update_stable_tag/update_latest_tag for this run or add the secret." >&2
-              exit 1
-            fi
-          fi
-
-          if [[ -n "${RELEASE_TAG_PUSH_TOKEN:-}" ]]; then
-            PUSH_REMOTE="https://x-access-token:${RELEASE_TAG_PUSH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
-          fi
-
-          # Ensure checkout's default token header cannot override PAT-based pushes.
-          git config --local --unset-all http.https://github.com/.extraheader || true
+          push_remote="https://x-access-token:${PUSH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
 
           move_tag() {
             local floating_tag="$1"
             [[ -n "$floating_tag" ]] || return 0
-            git tag -fa "$floating_tag" "$TARGET_COMMITISH" -m "Move $floating_tag -> $TARGET_TAG ($TARGET_COMMITISH)"
-            if ! git push "$PUSH_REMOTE" "refs/tags/$floating_tag" --force; then
-              echo "Failed to move floating tag '$floating_tag' to '$TARGET_TAG'." >&2
-              echo "If this release points to commits that modify files under .github/workflows/," >&2
-              echo "set repository secret RELEASE_TAG_PUSH_TOKEN to a token with workflows+contents write permissions." >&2
-              exit 1
-            fi
+            git tag -f -a \
+              -m "Move $floating_tag -> $TARGET_TAG ($TARGET_SHA)" \
+              -- "$floating_tag" "$TARGET_SHA"
+            git push "$push_remote" "refs/tags/$floating_tag" --force
           }
 
-          if [[ "${UPDATE_STABLE_TAG}" == "true" ]]; then
+          if [[ "$UPDATE_STABLE_TAG" == "true" ]]; then
             move_tag "$STABLE_TAG"
           fi
-
-          if [[ "${UPDATE_PRERELEASE_TAG}" == "true" ]]; then
+          if [[ "$UPDATE_PRERELEASE_TAG" == "true" ]]; then
             move_tag "$PRERELEASE_TAG"
           fi
-
-          if [[ "${UPDATE_LATEST_TAG}" == "true" ]]; then
+          if [[ "$UPDATE_LATEST_TAG" == "true" ]]; then
             move_tag "$LATEST_TAG"
           fi
 
-      - name: Verify floating tag targets
-        if: ${{ steps.meta.outputs.update_stable_tag == 'true' || steps.meta.outputs.update_prerelease_tag == 'true' || steps.meta.outputs.update_latest_tag == 'true' }}
+      - name: Verify every published tag target
         env:
-          PRERELEASE_TAG: ${{ steps.meta.outputs.prerelease_tag }}
-          STABLE_TAG: ${{ steps.meta.outputs.stable_tag }}
-          LATEST_TAG: ${{ steps.meta.outputs.latest_tag }}
-          UPDATE_STABLE_TAG: ${{ steps.meta.outputs.update_stable_tag }}
-          UPDATE_PRERELEASE_TAG: ${{ steps.meta.outputs.update_prerelease_tag }}
-          UPDATE_LATEST_TAG: ${{ steps.meta.outputs.update_latest_tag }}
+          TARGET_SHA: ${{ needs.resolve.outputs.target_sha }}
+          TARGET_TAG: ${{ needs.resolve.outputs.tag }}
+          PRERELEASE_TAG: ${{ needs.resolve.outputs.prerelease_tag }}
+          STABLE_TAG: ${{ needs.resolve.outputs.stable_tag }}
+          LATEST_TAG: ${{ needs.resolve.outputs.latest_tag }}
+          UPDATE_STABLE_TAG: ${{ needs.resolve.outputs.update_stable_tag }}
+          UPDATE_PRERELEASE_TAG: ${{ needs.resolve.outputs.update_prerelease_tag }}
+          UPDATE_LATEST_TAG: ${{ needs.resolve.outputs.update_latest_tag }}
         run: |
           set -euo pipefail
 
           resolve_remote_tag_sha() {
-            local t="$1"
-            local peeled=""
-            local plain=""
-
-            peeled="$(git ls-remote --refs --tags origin "refs/tags/${t}^{}" | awk '{print $1}')"
-            if [[ -n "$peeled" ]]; then
-              echo "$peeled"
-              return 0
+            local tag_name="$1"
+            local resolved=""
+            resolved="$(git ls-remote --tags origin "refs/tags/${tag_name}^{}" | awk '{print $1}')"
+            if [[ -z "$resolved" ]]; then
+              resolved="$(git ls-remote --tags origin "refs/tags/${tag_name}" | awk '{print $1}')"
             fi
-
-            plain="$(git ls-remote --refs --tags origin "refs/tags/${t}" | awk '{print $1}')"
-            if [[ -n "$plain" ]]; then
-              echo "$plain"
-              return 0
-            fi
-
-            echo "missing"
+            echo "$resolved"
           }
 
-          print_tag_state() {
-            local label="$1"
-            local tag_name="$2"
-            local enabled="$3"
-
-            if [[ "$enabled" != "true" ]]; then
-              echo "$label ($tag_name): skipped"
-              return 0
-            fi
-
-            echo "$label ($tag_name): $(resolve_remote_tag_sha "$tag_name")"
+          verify_tag() {
+            local tag_name="$1"
+            local actual_sha
+            actual_sha="$(resolve_remote_tag_sha "$tag_name")"
+            [[ "$actual_sha" == "$TARGET_SHA" ]] || {
+              echo "Tag $tag_name points to $actual_sha, expected $TARGET_SHA." >&2
+              exit 1
+            }
           }
 
-          echo "Floating tag targets on remote after update:"
-          print_tag_state "stable" "$STABLE_TAG" "$UPDATE_STABLE_TAG"
-          print_tag_state "pre-release" "$PRERELEASE_TAG" "$UPDATE_PRERELEASE_TAG"
-          print_tag_state "latest" "$LATEST_TAG" "$UPDATE_LATEST_TAG"
+          verify_tag "$TARGET_TAG"
+          if [[ "$UPDATE_STABLE_TAG" == "true" ]]; then
+            verify_tag "$STABLE_TAG"
+          fi
+          if [[ "$UPDATE_PRERELEASE_TAG" == "true" ]]; then
+            verify_tag "$PRERELEASE_TAG"
+          fi
+          if [[ "$UPDATE_LATEST_TAG" == "true" ]]; then
+            verify_tag "$LATEST_TAG"
+          fi
+
+      - name: Record published commit
+        env:
+          REQUESTED_TARGET: ${{ needs.resolve.outputs.requested_target }}
+          TARGET_SHA: ${{ needs.resolve.outputs.target_sha }}
+          TARGET_TAG: ${{ needs.resolve.outputs.tag }}
+        run: |
+          {
+            echo "## Published release"
+            echo
+            echo "- Requested target: \`$REQUESTED_TARGET\`"
+            echo "- Validated and published SHA: \`$TARGET_SHA\`"
+            echo "- Version tag: \`$TARGET_TAG\`"
+          } >> "$GITHUB_STEP_SUMMARY"

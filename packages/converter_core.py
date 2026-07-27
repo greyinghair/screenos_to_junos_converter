@@ -108,16 +108,20 @@ RE_MULTI_SVC: Final[re.Pattern[str]] = re.compile(r'^set service\s+".+"$')
 RE_GROUP_SERVICE: Final[re.Pattern[str]] = re.compile(
     r'^set group service\s+"[^"]+"\s+add\s+"[^"]+"\s*$',
 )
-RE_ADDRESS_LINE: Final[re.Pattern[str]] = re.compile(r'^set address')
+RE_ADDRESS_LINE: Final[re.Pattern[str]] = re.compile(r"^set address")
 RE_GROUP_ADDRESS: Final[re.Pattern[str]] = re.compile(
     r'^set group address\s+"[^"]+"\s+"[^"]+"\s+add\s+"[^"]+"\s*$',
 )
-RE_POLICY_DISABLE: Final[re.Pattern[str]] = re.compile(r'^set policy id \d+\s+disable\s*$')
-RE_POLICY: Final[re.Pattern[str]] = re.compile(r'^set policy id\s+\d+\s+\S')
-RE_POLICY_VALID_START: Final[re.Pattern[str]] = re.compile(r'^set policy id \d+\s+from\s+')
+RE_POLICY_DISABLE: Final[re.Pattern[str]] = re.compile(
+    r"^set policy id \d+\s+disable\s*$"
+)
+RE_POLICY: Final[re.Pattern[str]] = re.compile(r"^set policy id\s+\d+\s+\S")
+RE_POLICY_VALID_START: Final[re.Pattern[str]] = re.compile(
+    r"^set policy id \d+\s+from\s+"
+)
 RE_ADDRESS: Final[re.Pattern[str]] = re.compile(
     r'^set address\s+"(?P<zone>[^"]+)"\s+"(?P<name>[^"]+)"\s+'
-    r'(?P<value>\S+)(?:\s+(?P<mask>\d{1,3}(?:\.\d{1,3}){3}))?'
+    r"(?P<value>\S+)(?:\s+(?P<mask>\d{1,3}(?:\.\d{1,3}){3}))?"
     r'(?:\s+"[^"]*")?\s*$',
 )
 
@@ -139,7 +143,9 @@ class ConversionState:
     failed: int = 0
 
     default_app: dict[str, str] = field(default_factory=lambda: DEFAULT_APP_MAP.copy())
-    default_addr: dict[str, str] = field(default_factory=lambda: DEFAULT_ADDRESS_MAP.copy())
+    default_addr: dict[str, str] = field(
+        default_factory=lambda: DEFAULT_ADDRESS_MAP.copy()
+    )
 
     service_ns_to_junos: dict[str, str] = field(default_factory=dict)
     service_grp_to_app_set: dict[str, str] = field(default_factory=dict)
@@ -237,7 +243,7 @@ class Converter:
                 elif RE_GROUP_ADDRESS.search(line):
                     self.create_address_set(line, linecount)
                 elif RE_POLICY_DISABLE.search(line):
-                    policy_id = re.findall(r'(\d+)', line)[0]
+                    policy_id = re.findall(r"(\d+)", line)[0]
                     self.state.disabled_policy_id.add(policy_id)
                     self.state.disabled_policy_source[policy_id] = (linecount, line)
                 elif RE_POLICY.search(line):
@@ -359,7 +365,7 @@ class Converter:
 
         if mask is not None:
             try:
-                prefix_cidr = IP(f'{value}/{mask}', make_net=True)
+                prefix_cidr = IP(f"{value}/{mask}", make_net=True)
                 converted_line = (
                     f"set security zones security-zone {zone} address-book address "
                     f"{junos_address_name} {prefix_cidr}"
@@ -408,7 +414,9 @@ class Converter:
             )
             return
 
-        self.state.address_group_ns_to_junos_address_set[ns_address_grp] = junos_address_set
+        self.state.address_group_ns_to_junos_address_set[ns_address_grp] = (
+            junos_address_set
+        )
         self.combine_dicts("address")
 
         if ns_address in self.state.address_group_ns_to_junos_address_set:
@@ -426,7 +434,7 @@ class Converter:
 
     def create_rule(self, line: str, line_number: int | None = None) -> None:
         try:
-            line = re.sub(r'(name\s\"(.+?)\"\s)', '', line)
+            line = re.sub(r"(name\s\"(.+?)\"\s)", "", line)
 
             if not RE_POLICY_VALID_START.search(line):
                 self.record_failure(
@@ -438,7 +446,7 @@ class Converter:
 
             src_zone = self.zone_name(re.findall(r'("\S+")', line)[0])
             dst_zone = self.zone_name(re.findall(r'("\S+")', line)[1])
-            policy_id = re.findall(r'(\d+)', line)[0]
+            policy_id = re.findall(r"(\d+)", line)[0]
 
             ns_src_addr = re.findall(r'"([^"]*)"', line)[2]
             src_addr = self.state.address_and_set_dicts[ns_src_addr]
@@ -449,14 +457,14 @@ class Converter:
             ns_service = re.findall(r'"([^"]*)"', line)[4]
             junos_service = self.state.service_dicts[ns_service]
 
-            action = re.findall(r'\b(permit|deny)', line)[-1]
+            action = re.findall(r"\b(permit|deny)", line)[-1]
             self.state.multi_rule_params = [src_zone, dst_zone, policy_id]
 
             rule_params = [
-                f'match source-address {src_addr}',
-                f'match destination-address {dst_addr}',
-                f'match application {junos_service}',
-                f'then {action}',
+                f"match source-address {src_addr}",
+                f"match destination-address {dst_addr}",
+                f"match application {junos_service}",
+                f"then {action}",
             ]
 
             for rule_param in rule_params:
@@ -480,7 +488,7 @@ class Converter:
         line_number: int | None = None,
     ) -> None:
         argument = re.findall(r'"([^"]*)"', line)[0]
-        src_dst_or_service = re.findall(r'(.+)', line_type)[0]
+        src_dst_or_service = re.findall(r"(.+)", line_type)[0]
 
         if src_dst_or_service in ("destination-address", "source-address"):
             dict_to_lookup = self.state.address_and_set_dicts
@@ -508,7 +516,7 @@ class Converter:
 
         removed_count = 0
         disabled_patterns = [
-            re.compile(rf'^set security policies.+policy {policy_id}.+')
+            re.compile(rf"^set security policies.+policy {policy_id}.+")
             for policy_id in self.state.disabled_policy_id
         ]
 

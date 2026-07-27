@@ -17,8 +17,8 @@ def build_output_path(requested_output: str | None) -> Path:
     if requested_output:
         return Path(requested_output)
 
-    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-    return Path('outputs') / f'converted_{timestamp}.txt'
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    return Path("outputs") / f"converted_{timestamp}.txt"
 
 
 def parse_args() -> argparse.Namespace:

@@ -3,7 +3,9 @@ from __future__ import annotations
 from packages.converter_core import Converter
 
 
-def test_converter_supports_quoted_group_names_and_service_timeout(write_input_file) -> None:
+def test_converter_supports_quoted_group_names_and_service_timeout(
+    write_input_file,
+) -> None:
     input_path = write_input_file(
         "\n".join(
             [
@@ -29,13 +31,11 @@ def test_converter_supports_quoted_group_names_and_service_timeout(write_input_f
     )
     assert (
         "set security zones security-zone Trust address-book address-set source_group "
-        "address source_host"
-        in converter.state.converted_config
+        "address source_host" in converter.state.converted_config
     )
     assert (
         "set security policies from-zone Trust to-zone Untrust policy 1 "
-        "match application web_applications"
-        in converter.state.converted_config
+        "match application web_applications" in converter.state.converted_config
     )
     assert converter.state.failed == 0
 
@@ -62,18 +62,15 @@ def test_converter_supports_multiline_policy_matches(write_input_file) -> None:
 
     assert (
         "set security policies from-zone Trust to-zone Untrust policy 1 "
-        "match source-address src2"
-        in converter.state.converted_config
+        "match source-address src2" in converter.state.converted_config
     )
     assert (
         "set security policies from-zone Trust to-zone Untrust policy 1 "
-        "match destination-address dst2"
-        in converter.state.converted_config
+        "match destination-address dst2" in converter.state.converted_config
     )
     assert (
         "set security policies from-zone Trust to-zone Untrust policy 1 "
-        "match application tcp_80"
-        in converter.state.converted_config
+        "match application tcp_80" in converter.state.converted_config
     )
     assert converter.state.failed == 0
 
@@ -86,7 +83,7 @@ def test_converter_omits_disabled_policies(write_input_file) -> None:
                 'set address "Trust" "SRC1" 192.0.2.1 255.255.255.255',
                 'set address "Untrust" "DST1" 198.51.100.1 255.255.255.255',
                 'set policy id 1 from "Trust" to "Untrust" "SRC1" "DST1" "TCP/80" permit',
-                'set policy id 1 disable',
+                "set policy id 1 disable",
             ],
         ),
     )
