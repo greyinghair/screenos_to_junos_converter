@@ -1,0 +1,5 @@
+set service "Web API" protocol TCP src-port 1024-65535 dst-port 8443-8443 timeout 180
+set service "Data Range" protocol udp src-port 0-65535 dst-port 5000-5002
+set service "Dual DNS" protocol udp src-port 0-65535 dst-port 53-53
+set service "Dual DNS" + tcp src-port 0-65535 dst-port 53-53
+set group service "Web Bundle" add "Web API"

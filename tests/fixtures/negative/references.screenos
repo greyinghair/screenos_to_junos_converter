@@ -1,0 +1,4 @@
+set group service "Undefined Services" add "Missing Service"
+set group address "Trust" "Undefined Addresses" add "Missing Address"
+set policy id 9 from "Trust" to "Untrust" "Missing Source" "Missing Destination" "Missing Service" permit
+set src-address "Missing Source"

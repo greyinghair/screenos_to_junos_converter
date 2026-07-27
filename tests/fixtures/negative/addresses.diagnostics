@@ -1,0 +1,4 @@
+1|IPv4 address requires a dotted netmask
+2|invalid IPv4 address or netmask
+3|malformed or unsupported address definition
+5|ambiguous address name: "Web-App" and "Web App" both normalize to "web_app" in zone Trust

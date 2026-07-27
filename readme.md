@@ -18,8 +18,7 @@ This repository converts selected Juniper ScreenOS configuration objects into Ju
 Use converted output as a migration accelerator, not as an unattended full-fidelity migration.
 
 ## Python Version
-- Recommended: Python 3.14 (latest stable release as of 2026-04-01)
-- Supported: Python 3.12+
+- Tested and supported: Python 3.12–3.14
 
 ## Project Structure
 - `convert.py`: thin CLI entrypoint and argument parsing
@@ -28,6 +27,7 @@ Use converted output as a migration accelerator, not as an unattended full-fidel
 - `packages/sanity_check_naming.py`: Junos-safe name normalization
 - `packages/ipy.py`: local IP utility module used for address conversion
 - `tests/`: pytest fixtures and regression tests
+- `tests/fixtures/`: sanitized positive, negative, and end-to-end configurations
 
 
 ## Repository Tree
@@ -56,6 +56,9 @@ Use converted output as a migration accelerator, not as an unattended full-fidel
 |-- tests/                              # Regression and unit tests
 |   |-- conftest.py                     # Shared pytest fixtures
 |   |-- test_converter_smoke.py         # End-to-end smoke test
+|   |-- test_converter_syntax_coverage.py # Supported grammar tests
+|   |-- test_validation_fixtures.py     # Fixture validation harness
+|   |-- fixtures/                       # Sanitized conversion fixtures
 |   |-- test_convert_service.py         # Service parser unit tests
 |   `-- test_sanity_check_naming.py     # Naming helper unit tests
 |-- scripts/                            # Local maintenance/helper scripts
@@ -90,6 +93,8 @@ python3 convert.py \
 - Review output before deployment. Firewall migrations are security-sensitive and should include human validation.
 - Sample configs may contain sensitive values; avoid committing real production configs to source control.
 - Unmatched or unsupported lines are counted in the "NOT converted" metric.
+- Each unconverted line produces a line-numbered diagnostic explaining why it
+  was omitted.
 
 ## Development
 
@@ -107,6 +112,10 @@ python3 -m py_compile convert.py packages/converter_core.py \
   packages/convert_service.py packages/sanity_check_naming.py
 python3 -m pytest -q
 ```
+
+Feature changes must add or update sanitized fixtures in the same pull request.
+The fixture harness asserts exact deterministic output, conversion counts, and
+unsupported-line diagnostics.
 
 ### Docker
 ```bash

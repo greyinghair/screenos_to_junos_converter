@@ -1,0 +1,20 @@
+set service "Web API" protocol tcp src-port 0-65535 dst-port 8443-8443
+set service "Dual DNS" protocol udp src-port 0-65535 dst-port 53-53
+set service "Dual DNS" + tcp src-port 0-65535 dst-port 53-53
+set group service "Application Bundle" add "Web API"
+set group service "Application Bundle" add "Dual DNS"
+set address "Trust" "SRC1" 192.0.2.10 255.255.255.255
+set address "Trust" "SRC2" 192.0.2.11 255.255.255.255
+set address "Untrust" "DST" 198.51.100.20 255.255.255.255
+set address "Untrust" "Portal" portal.example.test
+set group address "Trust" "Sources" add "SRC1"
+set group address "Trust" "Sources" add "SRC2"
+set group address "Untrust" "Destinations" add "DST"
+set group address "Untrust" "Destinations" add "Portal"
+set policy id 100 from "Trust" to "Untrust" "Sources" "Destinations" "Application Bundle" permit
+set src-address "SRC2"
+set dst-address "Portal"
+set service "Dual DNS"
+set policy id 200 from "Trust" to "Untrust" "SRC1" "DST" "Web API" deny
+set policy id 200 disable
+set interface ethernet0/0 zone Trust

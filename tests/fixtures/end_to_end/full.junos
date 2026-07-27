@@ -1,0 +1,25 @@
+set applications application udp_161 protocol udp destination-port 161
+set applications application-set junos-dns application junos-dns-udp
+set applications application-set junos-dns application junos-dns-tcp
+set applications application tcp_8443 protocol tcp destination-port 8443
+set applications application udp_53 protocol udp destination-port 53
+set applications application-set dual_dns_group application udp_53
+set applications application-set dual_dns_group application tcp_53
+set applications application tcp_53 protocol tcp destination-port 53
+set applications application-set application_bundle application tcp_8443
+set applications application-set application_bundle application dual_dns_group
+set security zones security-zone Trust address-book address src1 192.0.2.10
+set security zones security-zone Trust address-book address src2 192.0.2.11
+set security zones security-zone Untrust address-book address dst 198.51.100.20
+set security zones security-zone Untrust address-book address portal dns-name portal.example.test
+set security zones security-zone Trust address-book address-set sources address src1
+set security zones security-zone Trust address-book address-set sources address src2
+set security zones security-zone Untrust address-book address-set destinations address dst
+set security zones security-zone Untrust address-book address-set destinations address portal
+set security policies from-zone Trust to-zone Untrust policy 100 match source-address sources
+set security policies from-zone Trust to-zone Untrust policy 100 match destination-address destinations
+set security policies from-zone Trust to-zone Untrust policy 100 match application application_bundle
+set security policies from-zone Trust to-zone Untrust policy 100 then permit
+set security policies from-zone Trust to-zone Untrust policy 100 match source-address src2
+set security policies from-zone Trust to-zone Untrust policy 100 match destination-address portal
+set security policies from-zone Trust to-zone Untrust policy 100 match application dual_dns_group

@@ -1,0 +1,8 @@
+set applications application udp_161 protocol udp destination-port 161
+set applications application-set junos-dns application junos-dns-udp
+set applications application-set junos-dns application junos-dns-tcp
+set security zones security-zone Trust address-book address source_host 192.0.2.10
+set security zones security-zone Untrust address-book address api_host dns-name api.example.test
+set security zones security-zone Trust address-book address-set source_hosts address source_host
+set security zones security-zone Trust address-book address-set nested_sources address-set source_hosts
+set security zones security-zone System-Management address-book address admin_host 203.0.113.10
