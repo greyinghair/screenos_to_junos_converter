@@ -118,5 +118,7 @@ docker run --rm -v "$PWD":/app screenos-to-junos \
 ## Reference Documentation
 - `docs/screenos/` contains ScreenOS reference PDFs
 - `docs/junos/` contains Junos CLI reference PDFs
+- [Conversion support matrix](docs/conversion-support-matrix.md) defines the
+  accepted grammar, rendered Junos hierarchy, and known limitations.
 
 These references are intended to support future enhancement of conversion coverage.

@@ -6,9 +6,17 @@ import re
 from typing import Final
 
 _SERVICE_PATTERN: Final[re.Pattern[str]] = re.compile(
-    r"(?:protocol|\+)\s+(tcp|udp)\s+src-port\s+\d+-\d+\s+dst-port\s+(\d+)-(\d+)",
+    r'^set\s+service\s+"(?P<name>[^"]+)"\s+(?:protocol|\+)\s+'
+    r'(?P<protocol>tcp|udp)\s+src-port\s+(?P<src_start>\d+)-(?P<src_end>\d+)\s+'
+    r'dst-port\s+(?P<dst_start>\d+)-(?P<dst_end>\d+)(?:\s+timeout\s+\d+)?\s*$',
     re.IGNORECASE,
 )
+
+
+def is_supported_service_definition(line: str) -> bool:
+    """Return whether *line* uses the currently supported ScreenOS service grammar."""
+
+    return _SERVICE_PATTERN.fullmatch(line) is not None
 
 
 def convert_service_in_file(line: str) -> tuple[str, str]:
@@ -25,9 +33,17 @@ def convert_service_in_file(line: str) -> tuple[str, str]:
     if not match:
         raise ValueError(f"Unable to parse service definition: {line.strip()}")
 
-    protocol = match.group(1).lower()
-    port_start = int(match.group(2))
-    port_end = int(match.group(3))
+    protocol = match.group("protocol").lower()
+    source_port_start = int(match.group("src_start"))
+    source_port_end = int(match.group("src_end"))
+    port_start = int(match.group("dst_start"))
+    port_end = int(match.group("dst_end"))
+
+    if source_port_start > source_port_end:
+        raise ValueError(
+            "Invalid source port range "
+            f"{source_port_start}-{source_port_end} in: {line.strip()}",
+        )
 
     if port_start > port_end:
         raise ValueError(
