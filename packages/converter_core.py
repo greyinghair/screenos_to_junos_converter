@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Final
 
-from .convert_service import convert_service_in_file
+from .convert_service import convert_service_in_file, is_supported_service_definition
 from .ipy import IP
 from .sanity_check_naming import sanity_check_naming
 
@@ -105,13 +105,16 @@ MISSING_CONFIG_LINES: Final[list[str]] = [
 RE_MULTI_DST: Final[re.Pattern[str]] = re.compile(r'^set dst-address\s+".+"$')
 RE_MULTI_SRC: Final[re.Pattern[str]] = re.compile(r'^set src-address\s+".+"$')
 RE_MULTI_SVC: Final[re.Pattern[str]] = re.compile(r'^set service\s+".+"$')
-RE_SERVICE_LINE: Final[re.Pattern[str]] = re.compile(r'^set service\s+".+\s(protocol|\+)')
-RE_GROUP_SERVICE: Final[re.Pattern[str]] = re.compile(r'^set group service\s+"\S+\sadd')
+RE_GROUP_SERVICE: Final[re.Pattern[str]] = re.compile(
+    r'^set group service\s+"[^"]+"\s+add\s+"[^"]+"\s*$',
+)
 RE_ADDRESS_LINE: Final[re.Pattern[str]] = re.compile(r'^set address')
-RE_GROUP_ADDRESS: Final[re.Pattern[str]] = re.compile(r'^set group address.+add')
-RE_POLICY_DISABLE: Final[re.Pattern[str]] = re.compile(r'^set policy id .+\sdisable$')
-RE_POLICY: Final[re.Pattern[str]] = re.compile(r'^set policy id.+\s\S')
-RE_POLICY_VALID_START: Final[re.Pattern[str]] = re.compile(r'^set policy id \d+ from')
+RE_GROUP_ADDRESS: Final[re.Pattern[str]] = re.compile(
+    r'^set group address\s+"[^"]+"\s+"[^"]+"\s+add\s+"[^"]+"\s*$',
+)
+RE_POLICY_DISABLE: Final[re.Pattern[str]] = re.compile(r'^set policy id \d+\s+disable\s*$')
+RE_POLICY: Final[re.Pattern[str]] = re.compile(r'^set policy id\s+\d+\s+\S')
+RE_POLICY_VALID_START: Final[re.Pattern[str]] = re.compile(r'^set policy id \d+\s+from\s+')
 
 
 @dataclass(slots=True)
@@ -190,7 +193,7 @@ class Converter:
                     self.multi_line_rule(line, "source-address")
                 elif RE_MULTI_SVC.search(line):
                     self.multi_line_rule(line, "application")
-                elif RE_SERVICE_LINE.search(line):
+                elif is_supported_service_definition(line):
                     self._parse_service_line(line)
                 elif RE_GROUP_SERVICE.search(line):
                     self.create_app_set(line)
