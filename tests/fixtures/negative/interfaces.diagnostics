@@ -1,0 +1,9 @@
+1|unsupported ScreenOS interface type: "serial0/0"
+2|invalid interface IPv4 prefix
+3|ethernet subinterface "ethernet0/1.100" requires an explicit VLAN tag
+4|VLAN tags require an Ethernet subinterface or VLAN interface
+5|management-interface MTU is not portable to Junos fxp0
+6|interface VLAN tag must be between 1 and 4094
+7|unnumbered donor interface "ethernet0/9" is undefined or has no IPv4 address
+9|IPv4 interface prefixes require the 'ip' form
+10|unsupported interface attribute: monitor link

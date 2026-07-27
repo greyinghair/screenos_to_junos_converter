@@ -1,0 +1,9 @@
+set address "Global" "SRC" 192.0.2.1 255.255.255.255
+set address "Global" "DST" 198.51.100.1 255.255.255.255
+set policy global id 10 "SRC" "DST" "HTTPS" permit schedule "Always"
+set src-address "SRC"
+set policy global id 20 "SRC" "DST" "HTTPS" deny
+set policy global id 20 disable
+set policy global id 30 "SRC" "DST" "HTTPS" permit log alert
+set policy global id 40 before 99 "SRC" "DST" "HTTPS" permit
+set policy global move 50 before 20

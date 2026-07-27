@@ -1,0 +1,16 @@
+set address "Global" "GLOBAL SRC1" 192.0.2.10 255.255.255.255
+set address "Global" "GLOBAL SRC2" 192.0.2.11 255.255.255.255
+set address "Global" "GLOBAL DST1" 198.51.100.20 255.255.255.255
+set address "Global" "GLOBAL DST2" 198.51.100.21 255.255.255.255
+set group address "Global" "GLOBAL SOURCES" add "GLOBAL SRC1"
+set group address "Global" "GLOBAL SOURCES" add "GLOBAL SRC2"
+set address "Trust" "ZONE SRC" 192.0.2.30 255.255.255.255
+set address "Untrust" "ZONE DST" 198.51.100.30 255.255.255.255
+set policy id 7 name "Zone Web" from "Trust" to "Untrust" "ZONE SRC" "ZONE DST" "HTTPS" permit
+set policy global id 100 name "Global Web" "GLOBAL SOURCES" "GLOBAL DST1" "HTTPS" permit log count
+set src-address "GLOBAL SRC2"
+set dst-address "GLOBAL DST2"
+set service "HTTP"
+set policy global id 90 top name "Global First" "Any" "GLOBAL DST1" "PING" deny
+set policy global id 110 before 100 name "Global Middle" "GLOBAL SRC1" "GLOBAL DST2" "HTTP" reject
+set policy global move 100 after 110

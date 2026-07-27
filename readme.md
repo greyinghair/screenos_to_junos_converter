@@ -4,9 +4,9 @@
 [![Python 3.13](https://img.shields.io/github/check-runs/greyinghair/screenos_to_junos_converter/main?nameFilter=Python%203.13&label=Python%203.13&logo=python)](https://github.com/greyinghair/screenos_to_junos_converter/actions/workflows/pr-validate.yml?query=branch%3Amain)
 [![Python 3.14](https://img.shields.io/github/check-runs/greyinghair/screenos_to_junos_converter/main?nameFilter=Python%203.14&label=Python%203.14&logo=python)](https://github.com/greyinghair/screenos_to_junos_converter/actions/workflows/pr-validate.yml?query=branch%3Amain)
 
-This program converts a tested subset of Juniper ScreenOS configuration into
-Junos SRX `set` commands. It is a migration aid, not a complete device
-configuration translator.
+This program converts a tested subset of Juniper ScreenOS services, addresses,
+interfaces, and firewall policies into Junos SRX `set` commands. It is a
+migration aid, not a complete device configuration translator.
 
 ## What It Converts
 
@@ -14,25 +14,34 @@ configuration translator.
   ScreenOS default services.
 - Service groups to Junos application sets.
 - Dotted-IPv4/netmask addresses and FQDN addresses, plus address groups, to
-  zone address books and address sets.
-- Numeric, zone-specific permit/deny policies, including multiline source,
-  destination, and service matches. Disabled policies are intentionally omitted.
+  zone or global address books and address sets.
+- Physical Ethernet interfaces, tagged subinterfaces, VLAN/IRB interfaces,
+  tunnel interfaces, and the management interface. The converter handles
+  descriptions, CIDR IPv4 and IPv6 interface addresses, MTU, administrative
+  state, VLAN tags, IPv4 unnumbered donors, and security-zone bindings.
+- Numeric zone-specific and global permit/deny/reject policies through one
+  policy model, including names, ordering directives, multiline source,
+  destination, and service matches, logging, and counters. Zone policies are
+  emitted before global policies to reflect Junos evaluation precedence.
+- Disabled policies are identified and intentionally omitted with a
+  line-specific diagnostic.
 
 The exact accepted ScreenOS grammar and Junos output hierarchy are maintained
 in the [conversion support matrix](docs/conversion-support-matrix.md).
 
 ## What It Does Not Convert
 
-- [Global policies](https://github.com/greyinghair/screenos_to_junos_converter/issues/18)
-- [Interfaces](https://github.com/greyinghair/screenos_to_junos_converter/issues/19)
 - [Static routes and BGP](https://github.com/greyinghair/screenos_to_junos_converter/issues/20)
 - [NAT (MIP, DIP, and interface NAT)](https://github.com/greyinghair/screenos_to_junos_converter/issues/17)
 - [IPsec VPNs](https://github.com/greyinghair/screenos_to_junos_converter/issues/21)
 - [IDP rules](https://github.com/greyinghair/screenos_to_junos_converter/issues/26)
 - [XML input or output](https://github.com/greyinghair/screenos_to_junos_converter/issues/4)
-- IPv6, CIDR, wildcard, and address-range input forms; non-TCP/UDP custom
-  services; service source-port rendering; and policy options beyond the tested
-  base and multiline match grammar.
+- Platform-specific interface aliases outside the documented
+  Ethernet/`mgt`/`tunnel.N`/`vlanN` mapping, management-interface MTU, or
+  interface attributes outside the tested support matrix.
+- IPv6, CIDR, wildcard, and address-range address-book input forms;
+  non-TCP/UDP custom services; service source-port rendering; and policy
+  schedules, alert logging, count alarms, or other unlisted policy options.
 
 Unsupported or unrecognized lines are reported with line numbers and reasons.
 Always review the generated configuration before deployment.
@@ -47,6 +56,7 @@ Always review the generated configuration before deployment.
 ## Project Structure
 - `convert.py`: thin CLI entrypoint and argument parsing
 - `packages/converter_core.py`: conversion engine and state model
+- `packages/conversion_models.py`: normalized interface and policy models
 - `packages/convert_service.py`: service parsing/conversion helpers
 - `packages/sanity_check_naming.py`: Junos-safe name normalization
 - `packages/ipy.py`: local IP utility module used for address conversion
@@ -76,6 +86,7 @@ Always review the generated configuration before deployment.
 |-- packages/                           # Python package with conversion logic
 |   |-- __init__.py                     # Explicit package exports
 |   |-- converter_core.py               # Core conversion engine and state
+|   |-- conversion_models.py            # Normalized interface and policy models
 |   |-- convert_service.py              # Service conversion helpers
 |   |-- sanity_check_naming.py          # Name normalization for Junos compatibility
 |   `-- ipy.py                          # Local IP/network parsing utility
@@ -85,6 +96,7 @@ Always review the generated configuration before deployment.
 |   |-- test_cli.py                     # CLI path and diagnostics tests
 |   |-- test_converter_smoke.py         # End-to-end smoke test
 |   |-- test_converter_syntax_coverage.py # Supported grammar tests
+|   |-- test_policy_interface_models.py # Interface mapping and shared policy model tests
 |   |-- test_validation_fixtures.py     # Fixture validation harness
 |   |-- fixtures/                       # Sanitized conversion fixtures
 |   |-- test_convert_service.py         # Service parser unit tests
