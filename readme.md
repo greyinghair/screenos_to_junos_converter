@@ -39,16 +39,17 @@ Use converted output as a migration accelerator, not as an unattended full-fidel
 ```text
 .
 |-- convert.py                          # CLI entrypoint: parses args and runs conversion
-|-- readme.md                           # Project overview, usage, and development guidance
+|-- readme.md                           # Project overview, usage, CI, and development guidance
 |-- requirements.txt                    # Runtime dependencies
-|-- requirements-dev.txt                # Developer dependencies (pytest)
-|-- input/                              # Source ScreenOS configs to convert
-|   `-- netscreen_config.txt            # Default converter input file
-|-- outputs/                            # Generated Junos conversion outputs (txt ignored)
+|-- requirements-dev.txt                # Ranged developer dependencies
+|-- requirements-dev-minimum.txt        # Exact supported dependency floors
+|-- requirements-dev-latest.txt         # Exact latest-compatible dependencies
+|-- pyproject.toml                       # Ruff, coverage, and pytest configuration
 |-- docker/                             # Container build context
 |   `-- Dockerfile                      # Container image definition
 |-- docs/                               # Vendor reference docs
 |   |-- readme.md                       # Notes on bundled vendor documentation
+|   |-- dependency-policy.md            # Version, quality, and security policy
 |   |-- screenos/                       # ScreenOS command references
 |   `-- junos/                          # Junos command references
 |-- packages/                           # Python package with conversion logic
@@ -59,6 +60,8 @@ Use converted output as a migration accelerator, not as an unattended full-fidel
 |   `-- ipy.py                          # Local IP/network parsing utility
 |-- tests/                              # Regression and unit tests
 |   |-- conftest.py                     # Shared pytest fixtures
+|   |-- test_automation_contracts.py    # CI, dependency, and release contracts
+|   |-- test_cli.py                     # CLI path and diagnostics tests
 |   |-- test_converter_smoke.py         # End-to-end smoke test
 |   |-- test_converter_syntax_coverage.py # Supported grammar tests
 |   |-- test_validation_fixtures.py     # Fixture validation harness
@@ -66,8 +69,15 @@ Use converted output as a migration accelerator, not as an unattended full-fidel
 |   |-- test_convert_service.py         # Service parser unit tests
 |   `-- test_sanity_check_naming.py     # Naming helper unit tests
 |-- scripts/                            # Local maintenance/helper scripts
-|   |-- session-close.sh                # Appends dated session handoff template
-|   `-- update-readme-tree.sh           # Regenerates this README tree section
+|   |-- update-readme-tree.sh           # Regenerates this README tree section
+|   `-- validate.sh                     # Shared local, CI, and release validation
+`-- .github/                            # Repository automation and CI config
+    |-- dependabot.yml                  # Automated dependency updates
+    `-- workflows/                      # GitHub Actions workflows
+        |-- pr-validate.yml             # Required Python and quality CI
+        |-- codeql-analysis.yml         # Security analysis workflow
+        |-- dependency-review.yml       # Vulnerable dependency gate
+        `-- release.yml                 # Validated release publishing
 ```
 <!-- repo-tree:end -->
 
@@ -112,14 +122,27 @@ python3 -m pip install --no-cache-dir -r requirements-dev.txt
 
 ### Validate and Test
 ```bash
-python3 -m py_compile convert.py packages/converter_core.py \
-  packages/convert_service.py packages/sanity_check_naming.py
-python3 -m pytest -q
+scripts/validate.sh all
 ```
 
 Feature changes must add or update sanitized fixtures in the same pull request.
 The fixture harness asserts exact deterministic output, conversion counts, and
 unsupported-line diagnostics.
+
+To reproduce the dependency boundaries used in CI:
+
+```bash
+python3 -m pip install \
+  -r requirements.txt \
+  -r requirements-dev.txt \
+  -c requirements-dev-minimum.txt
+scripts/validate.sh test
+```
+
+Replace `requirements-dev-minimum.txt` with `requirements-dev-latest.txt` for
+the latest-compatible environment. See the
+[dependency and validation policy](docs/dependency-policy.md) for the
+version-boundary, coverage, vulnerability, and license rules.
 
 ### Docker
 ```bash

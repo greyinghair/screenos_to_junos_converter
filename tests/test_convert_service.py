@@ -18,7 +18,9 @@ def test_convert_service_single_port() -> None:
 
 
 def test_convert_service_port_range() -> None:
-    line = 'set service "TCP/4505-4506" protocol tcp src-port 0-65535 dst-port 4505-4506'
+    line = (
+        'set service "TCP/4505-4506" protocol tcp src-port 0-65535 dst-port 4505-4506'
+    )
     app_name, converted = convert_service_in_file(line)
     assert app_name == "tcp_4505-4506"
     assert converted == (
@@ -35,7 +37,7 @@ def test_convert_service_invalid_line_raises() -> None:
 def test_convert_service_accepts_timeout_and_case_insensitive_protocol() -> None:
     line = (
         'set service "DNS Alternative" protocol UDP src-port 0-65535 '
-        'dst-port 5353-5353 timeout 180'
+        "dst-port 5353-5353 timeout 180"
     )
 
     app_name, converted = convert_service_in_file(line)

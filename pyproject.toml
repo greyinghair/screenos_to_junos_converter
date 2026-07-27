@@ -1,0 +1,20 @@
+[tool.ruff]
+target-version = "py312"
+line-length = 88
+extend-exclude = ["packages/ipy.py", "venv"]
+
+[tool.ruff.lint]
+select = ["B", "E4", "E7", "E9", "F", "I", "RUF", "SIM", "UP"]
+
+[tool.coverage.run]
+branch = true
+source = ["."]
+omit = ["tests/*", "venv/*"]
+
+[tool.coverage.report]
+fail_under = 43
+show_missing = true
+skip_covered = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

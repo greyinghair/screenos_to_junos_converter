@@ -21,9 +21,13 @@ def run_fixture(path: Path) -> Converter:
 @pytest.mark.parametrize("feature", ["services", "addresses", "policies"])
 def test_supported_feature_fixtures_are_exact_and_deterministic(feature: str) -> None:
     input_path = FIXTURE_ROOT / "features" / f"{feature}.screenos"
-    expected = (FIXTURE_ROOT / "features" / f"{feature}.junos").read_text(
-        encoding="utf-8",
-    ).splitlines()
+    expected = (
+        (FIXTURE_ROOT / "features" / f"{feature}.junos")
+        .read_text(
+            encoding="utf-8",
+        )
+        .splitlines()
+    )
 
     first = run_fixture(input_path)
     second = run_fixture(input_path)
@@ -45,8 +49,10 @@ def test_unsupported_feature_fixtures_report_line_specific_diagnostics(
 ) -> None:
     input_path = FIXTURE_ROOT / "negative" / f"{feature}.screenos"
     expected_diagnostics = (
-        FIXTURE_ROOT / "negative" / f"{feature}.diagnostics"
-    ).read_text(encoding="utf-8").splitlines()
+        (FIXTURE_ROOT / "negative" / f"{feature}.diagnostics")
+        .read_text(encoding="utf-8")
+        .splitlines()
+    )
 
     converter = run_fixture(input_path)
     actual_diagnostics = [
@@ -66,9 +72,13 @@ def test_unsupported_feature_fixtures_report_line_specific_diagnostics(
 
 def test_full_conversion_fixture_validates_output_counts_and_diagnostics() -> None:
     input_path = FIXTURE_ROOT / "end_to_end" / "full.screenos"
-    expected = (FIXTURE_ROOT / "end_to_end" / "full.junos").read_text(
-        encoding="utf-8",
-    ).splitlines()
+    expected = (
+        (FIXTURE_ROOT / "end_to_end" / "full.junos")
+        .read_text(
+            encoding="utf-8",
+        )
+        .splitlines()
+    )
 
     converter = run_fixture(input_path)
 

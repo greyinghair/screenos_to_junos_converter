@@ -7,8 +7,8 @@ from typing import Final
 
 _SERVICE_PATTERN: Final[re.Pattern[str]] = re.compile(
     r'^set\s+service\s+"(?P<name>[^"]+)"\s+(?:protocol|\+)\s+'
-    r'(?P<protocol>tcp|udp)\s+src-port\s+(?P<src_start>\d+)-(?P<src_end>\d+)\s+'
-    r'dst-port\s+(?P<dst_start>\d+)-(?P<dst_end>\d+)(?:\s+timeout\s+\d+)?\s*$',
+    r"(?P<protocol>tcp|udp)\s+src-port\s+(?P<src_start>\d+)-(?P<src_end>\d+)\s+"
+    r"dst-port\s+(?P<dst_start>\d+)-(?P<dst_end>\d+)(?:\s+timeout\s+\d+)?\s*$",
     re.IGNORECASE,
 )
 

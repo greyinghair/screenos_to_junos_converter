@@ -46,25 +46,129 @@ jobs:
       - name: Check dependency compatibility
         run: python -m pip check
 
-      - name: Compile check
-        run: python -m compileall -q convert.py packages tests
+      - name: Run required tests
+        env:
+          JUNIT_XML: artifacts/junit-python-${{ matrix.python-version }}.xml
+        run: scripts/validate.sh test
 
-      - name: Run tests
-        run: python -m pytest -q
+      - name: Upload failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: junit-python-${{ matrix.python-version }}-${{ github.run_attempt }}
+          path: artifacts/
+          if-no-files-found: warn
+
+  quality:
+    name: Quality and coverage
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.14"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+            requirements-dev-latest.txt
+
+      - name: Install latest compatible development dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install \
+            -r requirements.txt \
+            -r requirements-dev.txt \
+            -c requirements-dev-latest.txt
+          python -m pip check
+
+      - name: Run lint, format, syntax, tests, and coverage
+        run: scripts/validate.sh all
+
+      - name: Upload failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: quality-diagnostics-${{ github.run_attempt }}
+          path: artifacts/
+          if-no-files-found: warn
+
+  dependency_boundaries:
+    name: Dependencies (${{ matrix.boundary }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - boundary: minimum
+            python-version: "3.12"
+          - boundary: latest
+            python-version: "3.14"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+            requirements-dev-${{ matrix.boundary }}.txt
+
+      - name: Install ${{ matrix.boundary }} dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install \
+            -r requirements.txt \
+            -r requirements-dev.txt \
+            -c requirements-dev-${{ matrix.boundary }}.txt
+          python -m pip check
+
+      - name: Run boundary validation
+        env:
+          JUNIT_XML: artifacts/junit-dependencies-${{ matrix.boundary }}.xml
+          COVERAGE_XML: artifacts/coverage-dependencies-${{ matrix.boundary }}.xml
+        run: scripts/validate.sh all
+
+      - name: Upload failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dependencies-${{ matrix.boundary }}-${{ github.run_attempt }}
+          path: artifacts/
+          if-no-files-found: warn
 
   required:
     name: required
     if: always()
-    needs: test
+    needs:
+      - test
+      - quality
+      - dependency_boundaries
     runs-on: ubuntu-latest
     timeout-minutes: 5
 
     steps:
-      - name: Require every supported Python version
+      - name: Require every validation job
         env:
           TEST_RESULT: ${{ needs.test.result }}
+          QUALITY_RESULT: ${{ needs.quality.result }}
+          DEPENDENCY_RESULT: ${{ needs.dependency_boundaries.result }}
         run: |
-          if [[ "$TEST_RESULT" != "success" ]]; then
-            echo "One or more supported Python test jobs failed."
+          if [[ "$TEST_RESULT" != "success" ]] ||
+             [[ "$QUALITY_RESULT" != "success" ]] ||
+             [[ "$DEPENDENCY_RESULT" != "success" ]]; then
+            echo "One or more required validation jobs failed."
             exit 1
           fi

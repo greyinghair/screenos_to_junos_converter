@@ -13,3 +13,5 @@ scripts/session-close.sh
 !requirements.txt
 input/*.txt
 outputs/*.txt
+artifacts/
+.coverage*

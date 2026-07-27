@@ -22,7 +22,6 @@ def test_converter_smoke(minimal_config_text: str, write_input_file) -> None:
     )
     assert (
         "set security policies from-zone Trust to-zone Untrust policy 1 "
-        "match source-address src1"
-        in output_lines
+        "match source-address src1" in output_lines
     )
     assert converter.state.succeeded > 0

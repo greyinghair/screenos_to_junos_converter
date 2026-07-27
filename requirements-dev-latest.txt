@@ -1,0 +1,5 @@
+# Latest compatible direct development dependencies validated on 2026-07-27.
+# Dependabot keeps these reproducible pins current within the declared ranges.
+pytest==9.1.1
+pytest-cov==7.1.0
+ruff==0.16.0

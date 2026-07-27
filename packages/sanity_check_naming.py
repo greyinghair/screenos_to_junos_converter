@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from typing import Final
 
-_INVALID_CHARS: Final[str] = ' ./"\'\\!?[]{}|()-+'
+_INVALID_CHARS: Final[str] = " ./\"'\\!?[]{}|()-+"
 _TRANSLATION_TABLE: Final[dict[int, int | str | None]] = str.maketrans(
     {char: "_" for char in _INVALID_CHARS}
 )
