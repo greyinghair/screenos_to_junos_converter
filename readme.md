@@ -4,25 +4,45 @@
 [![Python 3.13](https://img.shields.io/github/check-runs/greyinghair/screenos_to_junos_converter/main?nameFilter=Python%203.13&label=Python%203.13&logo=python)](https://github.com/greyinghair/screenos_to_junos_converter/actions/workflows/pr-validate.yml?query=branch%3Amain)
 [![Python 3.14](https://img.shields.io/github/check-runs/greyinghair/screenos_to_junos_converter/main?nameFilter=Python%203.14&label=Python%203.14&logo=python)](https://github.com/greyinghair/screenos_to_junos_converter/actions/workflows/pr-validate.yml?query=branch%3Amain)
 
-This repository converts selected Juniper ScreenOS configuration objects into Junos SRX `set` commands to help with migration projects.
+This program converts a tested subset of Juniper ScreenOS configuration into
+Junos SRX `set` commands. It is a migration aid, not a complete device
+configuration translator.
 
 ## What It Converts
-- Custom services/applications
-- Service groups to Junos application-sets
-- Addresses and address groups to address-book entries/sets
-- Policies (including multiline `set src-address`, `set dst-address`, and `set service` continuations)
 
-## What It Does Not Fully Convert
-- NAT behavior (MIP/DIP/interface NAT still requires manual migration)
-- Interfaces
-- VPNs
-- Routes
-- Global policy behavior
+- TCP and UDP custom services with numeric destination ports, plus supported
+  ScreenOS default services.
+- Service groups to Junos application sets.
+- Dotted-IPv4/netmask addresses and FQDN addresses, plus address groups, to
+  zone address books and address sets.
+- Numeric, zone-specific permit/deny policies, including multiline source,
+  destination, and service matches. Disabled policies are intentionally omitted.
 
-Use converted output as a migration accelerator, not as an unattended full-fidelity migration.
+The exact accepted ScreenOS grammar and Junos output hierarchy are maintained
+in the [conversion support matrix](docs/conversion-support-matrix.md).
+
+## What It Does Not Convert
+
+- [Global policies](https://github.com/greyinghair/screenos_to_junos_converter/issues/18)
+- [Interfaces](https://github.com/greyinghair/screenos_to_junos_converter/issues/19)
+- [Static routes and BGP](https://github.com/greyinghair/screenos_to_junos_converter/issues/20)
+- [NAT (MIP, DIP, and interface NAT)](https://github.com/greyinghair/screenos_to_junos_converter/issues/17)
+- [IPsec VPNs](https://github.com/greyinghair/screenos_to_junos_converter/issues/21)
+- [IDP rules](https://github.com/greyinghair/screenos_to_junos_converter/issues/26)
+- [XML input or output](https://github.com/greyinghair/screenos_to_junos_converter/issues/4)
+- IPv6, CIDR, wildcard, and address-range input forms; non-TCP/UDP custom
+  services; service source-port rendering; and policy options beyond the tested
+  base and multiline match grammar.
+
+Unsupported or unrecognized lines are reported with line numbers and reasons.
+Always review the generated configuration before deployment.
 
 ## Python Version
+
 - Tested and supported: Python 3.12–3.14
+- Experimental weekly canaries exercise the next Python prerelease and the
+  newest resolvable pytest prerelease. Canary success does not promote either
+  one into the supported range.
 
 ## Project Structure
 - `convert.py`: thin CLI entrypoint and argument parsing
@@ -50,6 +70,7 @@ Use converted output as a migration accelerator, not as an unattended full-fidel
 |-- docs/                               # Vendor reference docs
 |   |-- readme.md                       # Notes on bundled vendor documentation
 |   |-- dependency-policy.md            # Version, quality, and security policy
+|   |-- conversion-support-matrix.md    # Accepted grammar and known limitations
 |   |-- screenos/                       # ScreenOS command references
 |   `-- junos/                          # Junos command references
 |-- packages/                           # Python package with conversion logic
@@ -75,6 +96,7 @@ Use converted output as a migration accelerator, not as an unattended full-fidel
     |-- dependabot.yml                  # Automated dependency updates
     `-- workflows/                      # GitHub Actions workflows
         |-- pr-validate.yml             # Required Python and quality CI
+        |-- prerelease-canary.yml       # Non-blocking Python/pytest canaries
         |-- codeql-analysis.yml         # Security analysis workflow
         |-- dependency-review.yml       # Vulnerable dependency gate
         `-- release.yml                 # Validated release publishing

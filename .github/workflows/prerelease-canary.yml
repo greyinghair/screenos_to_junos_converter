@@ -1,0 +1,173 @@
+name: Prerelease compatibility
+
+on:
+  schedule:
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: prerelease-canary-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  python_prerelease:
+    name: Python 3.15 prerelease
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Record requested environment
+        run: |
+          mkdir -p artifacts
+          echo "requested-python=3.15 prerelease" \
+            > artifacts/python-prerelease-environment.txt
+
+      - name: Set up Python 3.15 prerelease
+        id: setup
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.15"
+          allow-prereleases: true
+          check-latest: true
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+
+      - name: Install development dependencies
+        id: install
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install --pre \
+            -r requirements.txt \
+            -r requirements-dev.txt
+          python -m pip check
+
+      - name: Record resolved environment
+        if: always()
+        run: |
+          {
+            echo "setup-result=${{ steps.setup.outcome }}"
+            echo "install-result=${{ steps.install.outcome }}"
+            if [[ "${{ steps.setup.outcome }}" == "success" ]]; then
+              python --version
+              python -m pip --version
+              python -m pytest --version
+              python -m pip freeze
+            else
+              echo "resolved-python=unavailable"
+            fi
+          } | tee -a artifacts/python-prerelease-environment.txt
+
+      - name: Run shared validation
+        env:
+          JUNIT_XML: artifacts/junit-python-3.15-prerelease.xml
+        run: scripts/validate.sh test
+
+      - name: Summarize Python prerelease result
+        if: always()
+        run: |
+          {
+            echo "## Python 3.15 prerelease canary"
+            echo
+            echo "- Validation result: ${{ job.status }}"
+            echo "- Supported Python remains 3.12–3.14."
+            echo
+            echo '```text'
+            cat artifacts/python-prerelease-environment.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload Python prerelease failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-3.15-prerelease-${{ github.run_attempt }}
+          path: artifacts/
+          if-no-files-found: warn
+          retention-days: 14
+
+  pytest_prerelease:
+    name: Pytest prerelease on Python 3.14
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Record requested environment
+        run: |
+          mkdir -p artifacts
+          echo "requested-pytest=newest resolvable prerelease" \
+            > artifacts/pytest-prerelease-environment.txt
+
+      - name: Set up supported Python
+        id: setup
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.14"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+
+      - name: Install development dependencies and pytest prerelease
+        id: install
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install \
+            -r requirements.txt \
+            -r requirements-dev.txt
+          python -m pip install --upgrade --pre pytest
+          python -m pip check
+
+      - name: Record resolved environment
+        if: always()
+        run: |
+          {
+            echo "setup-result=${{ steps.setup.outcome }}"
+            echo "install-result=${{ steps.install.outcome }}"
+            if [[ "${{ steps.setup.outcome }}" == "success" ]]; then
+              python --version
+              python -m pip --version
+              python -m pytest --version
+              python -m pip freeze
+            else
+              echo "resolved-python=unavailable"
+            fi
+          } | tee -a artifacts/pytest-prerelease-environment.txt
+
+      - name: Run shared validation
+        env:
+          JUNIT_XML: artifacts/junit-pytest-prerelease.xml
+        run: scripts/validate.sh test
+
+      - name: Summarize pytest prerelease result
+        if: always()
+        run: |
+          {
+            echo "## Pytest prerelease canary"
+            echo
+            echo "- Validation result: ${{ job.status }}"
+            echo "- Supported dependency bounds remain unchanged."
+            echo
+            echo '```text'
+            cat artifacts/pytest-prerelease-environment.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload pytest prerelease failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pytest-prerelease-${{ github.run_attempt }}
+          path: artifacts/
+          if-no-files-found: warn
+          retention-days: 14
