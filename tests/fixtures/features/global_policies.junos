@@ -1,0 +1,33 @@
+set applications application udp_161 protocol udp destination-port 161
+set applications application-set junos-dns application junos-dns-udp
+set applications application-set junos-dns application junos-dns-tcp
+set security address-book global address global_src1 192.0.2.10
+set security address-book global address global_src2 192.0.2.11
+set security address-book global address global_dst1 198.51.100.20
+set security address-book global address global_dst2 198.51.100.21
+set security address-book global address-set global_sources address global_src1
+set security address-book global address-set global_sources address global_src2
+set security zones security-zone Trust address-book address zone_src 192.0.2.30
+set security zones security-zone Untrust address-book address zone_dst 198.51.100.30
+set security policies from-zone Trust to-zone Untrust policy zone_web match source-address zone_src
+set security policies from-zone Trust to-zone Untrust policy zone_web match destination-address zone_dst
+set security policies from-zone Trust to-zone Untrust policy zone_web match application junos-https
+set security policies from-zone Trust to-zone Untrust policy zone_web then permit
+set security policies global policy global_first match source-address any
+set security policies global policy global_first match destination-address global_dst1
+set security policies global policy global_first match application junos-ping
+set security policies global policy global_first then deny
+set security policies global policy global_middle match source-address global_src1
+set security policies global policy global_middle match destination-address global_dst2
+set security policies global policy global_middle match application junos-http
+set security policies global policy global_middle then reject
+set security policies global policy global_web match source-address global_sources
+set security policies global policy global_web match destination-address global_dst1
+set security policies global policy global_web match application junos-https
+set security policies global policy global_web then permit
+set security policies global policy global_web then log session-init
+set security policies global policy global_web then log session-close
+set security policies global policy global_web then count
+set security policies global policy global_web match source-address global_src2
+set security policies global policy global_web match destination-address global_dst2
+set security policies global policy global_web match application junos-http

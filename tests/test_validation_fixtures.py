@@ -18,7 +18,10 @@ def run_fixture(path: Path) -> Converter:
     return converter
 
 
-@pytest.mark.parametrize("feature", ["services", "addresses", "policies"])
+@pytest.mark.parametrize(
+    "feature",
+    ["services", "addresses", "policies", "global_policies", "interfaces"],
+)
 def test_supported_feature_fixtures_are_exact_and_deterministic(feature: str) -> None:
     input_path = FIXTURE_ROOT / "features" / f"{feature}.screenos"
     expected = (
@@ -41,7 +44,13 @@ def test_supported_feature_fixtures_are_exact_and_deterministic(feature: str) ->
 
 @pytest.mark.parametrize(
     ("feature", "expected_succeeded"),
-    [("services", 3), ("addresses", 4), ("references", 3)],
+    [
+        ("services", 3),
+        ("addresses", 4),
+        ("references", 3),
+        ("interfaces", 3),
+        ("policies", 5),
+    ],
 )
 def test_unsupported_feature_fixtures_report_line_specific_diagnostics(
     feature: str,
@@ -83,14 +92,13 @@ def test_full_conversion_fixture_validates_output_counts_and_diagnostics() -> No
     converter = run_fixture(input_path)
 
     assert converter.state.converted_config == expected
-    assert converter.state.succeeded == len(expected) == 25
-    assert converter.state.failed == 2
+    assert converter.state.succeeded == len(expected) == 27
+    assert converter.state.failed == 1
     assert [
         (diagnostic.line_number, diagnostic.reason)
         for diagnostic in converter.state.diagnostics
     ] == [
-        (20, "unsupported or unrecognized syntax"),
-        (19, "disabled policy 200 omitted from output"),
+        (19, "disabled zone policy 200 omitted from output"),
     ]
 
 

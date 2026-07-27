@@ -1,0 +1,6 @@
+3|unsupported policy option: schedule Always
+4|policy continuation has no resolvable base policy or object
+6|disabled global policy 20 omitted from output
+7|policy option 'log alert' has no lossless Junos mapping
+8|policy 40 references missing before target 99
+9|policy move references an undefined policy or different context

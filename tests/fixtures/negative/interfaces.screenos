@@ -1,0 +1,10 @@
+set interface serial0/0 zone Trust
+set interface ethernet0/0 ip 198.51.100.999/24
+set interface ethernet0/1.100 zone Trust
+set interface tunnel.1 tag 1
+set interface mgt mtu 1500
+set interface vlan4095 tag 4095
+set interface tunnel.2 ip unnumbered interface ethernet0/9
+set interface tunnel.2 zone VPN
+set interface ethernet0/2 ipv6 ip 192.0.2.1/24
+set interface ethernet0/3 monitor link
