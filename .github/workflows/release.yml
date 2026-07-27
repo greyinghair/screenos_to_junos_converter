@@ -85,7 +85,7 @@ jobs:
 
     steps:
       - name: Checkout release workflow source
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
           persist-credentials: false
@@ -263,14 +263,14 @@ jobs:
 
     steps:
       - name: Checkout current validation contract
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           ref: ${{ github.sha }}
           path: validation-contract
           persist-credentials: false
 
       - name: Checkout resolved release target
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           ref: ${{ needs.resolve.outputs.target_sha }}
           path: target
@@ -335,7 +335,7 @@ jobs:
 
     steps:
       - name: Checkout tested commit
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           ref: ${{ needs.resolve.outputs.target_sha }}
           fetch-depth: 0
