@@ -20,7 +20,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Record requested environment
         run: |
@@ -30,7 +30,7 @@ jobs:
 
       - name: Set up Python 3.15 prerelease
         id: setup
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v7
         with:
           python-version: "3.15"
           allow-prereleases: true
@@ -86,7 +86,7 @@ jobs:
 
       - name: Upload Python prerelease failure diagnostics
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: python-3.15-prerelease-${{ github.run_attempt }}
           path: artifacts/
@@ -100,7 +100,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Record requested environment
         run: |
@@ -110,7 +110,7 @@ jobs:
 
       - name: Set up supported Python
         id: setup
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v7
         with:
           python-version: "3.14"
           cache: pip
@@ -165,7 +165,7 @@ jobs:
 
       - name: Upload pytest prerelease failure diagnostics
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: pytest-prerelease-${{ github.run_attempt }}
           path: artifacts/
