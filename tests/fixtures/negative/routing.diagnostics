@@ -3,4 +3,5 @@
 4|static-route description has no portable Junos set-command mapping
 5|ScreenOS permanent-route state has no lossless Junos static-route mapping
 6|BGP instance "blue-vr" has no local AS
-7|source-based and source-interface routes are unsupported
+7|BGP MD5 authentication secret omitted; configure a Junos authentication key manually
+8|source-based and source-interface routes are unsupported

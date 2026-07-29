@@ -26,8 +26,8 @@ It is a migration aid, not a complete device configuration translator.
 - Static routes in the default or named virtual routers, including mapped
   interfaces, next hops, metrics, preferences, tags, and discard routes.
 - BGP local-AS/router-ID configuration and enabled IPv4/IPv6 peers, including
-  peer groups, hold times, authentication keys, source interfaces, and
-  import/export policy references.
+  peer groups, hold times, source interfaces, and import/export policy
+  references.
 - MIP static NAT, DIP source pools, and policy-linked DIP or egress-interface
   source NAT. NAT rules reuse converted interfaces, zones, address prefixes,
   services, and policy ordering.
@@ -43,8 +43,10 @@ in the [conversion support matrix](docs/conversion-support-matrix.md).
 - [IDP rules](https://github.com/greyinghair/screenos_to_junos_converter/issues/26)
 - [XML input or output](https://github.com/greyinghair/screenos_to_junos_converter/issues/4)
 - Source-based routes, BGP network origination/redistribution, and ScreenOS
-  route-map definitions. Converted BGP import/export policy names must already
-  exist on the target or be migrated separately.
+  route-map definitions. BGP MD5 authentication secrets are redacted and
+  diagnosed instead of being copied into generated configuration; configure
+  authentication keys manually on the target. Converted BGP import/export
+  policy names must already exist on the target or be migrated separately.
 - Policy NAT-dst/VIP, global policy NAT-src, raw interface NAT mode without
   destination context, and extended/incoming/random/shifted DIP variants.
 - Platform-specific interface aliases outside the documented

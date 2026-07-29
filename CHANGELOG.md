@@ -4,6 +4,7 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased
 
+- fix: omit BGP authentication secrets from generated configuration and redact them from diagnostics.
 - feat: convert static routes, routing instances, and supported BGP peer groups.
 - feat: convert MIP static NAT, DIP pools, and policy-linked source NAT.
 - test: add deterministic positive, negative, model, and end-to-end routing/NAT coverage.

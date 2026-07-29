@@ -157,7 +157,6 @@ class BgpOptions:
     remote_as: int | None = None
     hold_time: int | None = None
     keepalive: int | None = None
-    authentication_key: str | None = None
     import_policy: str | None = None
     export_policy: str | None = None
     source_interface: str | None = None

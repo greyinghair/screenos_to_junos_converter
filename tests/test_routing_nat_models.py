@@ -54,6 +54,77 @@ def test_static_routes_and_bgp_share_resolved_routing_state() -> None:
     )
 
 
+def test_bgp_authentication_secret_is_omitted_and_redacted(tmp_path: Path) -> None:
+    secrets = (
+        "distinctive-bgp-secret",
+        "unquoted-bgp-secret",
+        "unterminated-bgp-secret",
+    )
+    input_path = tmp_path / "bgp-secret.screenos"
+    output_path = tmp_path / "bgp-secret.junos"
+    input_path.write_text(
+        "\n".join(
+            [
+                "set vrouter trust-vr protocol bgp 64500",
+                "set vrouter trust-vr protocol bgp enable",
+                (
+                    'set vrouter trust-vr protocol bgp neighbor peer-group "External" '
+                    "remote-as 64501"
+                ),
+                (
+                    'set vrouter trust-vr protocol bgp neighbor peer-group "External" '
+                    f'md5-authentication "{secrets[0]}"'
+                ),
+                (
+                    "set vrouter trust-vr protocol bgp neighbor 198.51.100.1 "
+                    'peer-group "External"'
+                ),
+                "set vrouter trust-vr protocol bgp neighbor 198.51.100.1 enable",
+                (
+                    "set vrouter trust-vr protocol bgp neighbor 198.51.100.1 "
+                    f"md5-authentication {secrets[1]}"
+                ),
+                (
+                    "set vrouter trust-vr protocol bgp neighbor 198.51.100.2 "
+                    f'md5-authentication "{secrets[2]}'
+                ),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    converter = Converter(progress_interval=9999)
+    converter.read_file(input_path)
+    converter.converted_config_output(output_path)
+
+    persisted_state = output_path.read_text(encoding="utf-8") + repr(converter.state)
+    assert all(secret not in persisted_state for secret in secrets)
+    authentication_diagnostics = [
+        diagnostic
+        for diagnostic in converter.state.diagnostics
+        if diagnostic.reason
+        == (
+            "BGP MD5 authentication secret omitted; configure a Junos "
+            "authentication key manually"
+        )
+    ]
+    assert len(authentication_diagnostics) == 2
+    assert all(
+        diagnostic.line.endswith("md5-authentication <redacted>")
+        for diagnostic in authentication_diagnostics
+    )
+    assert any(
+        diagnostic.line.endswith("md5-authentication <redacted>")
+        and diagnostic.reason == "malformed virtual-router definition"
+        for diagnostic in converter.state.diagnostics
+    )
+    assert (
+        "set protocols bgp group external neighbor 198.51.100.1"
+        in converter.state.converted_config
+    )
+
+
 def test_nat_models_preserve_precedence_and_policy_linkage() -> None:
     converter = Converter(progress_interval=9999)
     converter.read_file(FIXTURE_ROOT / "features" / "nat.screenos")
