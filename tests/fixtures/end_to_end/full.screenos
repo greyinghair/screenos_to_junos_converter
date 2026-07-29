@@ -18,3 +18,8 @@ set service "Dual DNS"
 set policy id 200 from "Trust" to "Untrust" "SRC1" "DST" "Web API" deny
 set policy id 200 disable
 set interface ethernet0/0 zone Trust
+set interface ethernet0/1 zone Untrust
+set interface ethernet0/1 ip 203.0.113.2/24
+set vrouter trust-vr route 0.0.0.0/0 interface ethernet0/1 gateway 203.0.113.1 preference 10
+set interface ethernet0/1 dip 5 203.0.113.100
+set policy id 300 from "Trust" to "Untrust" "Sources" "DST" "Application Bundle" nat src dip-id 5 permit

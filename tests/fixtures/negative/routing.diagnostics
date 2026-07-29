@@ -1,0 +1,6 @@
+2|invalid static-route prefix
+3|undefined routing interface: "ethernet9/9"
+4|static-route description has no portable Junos set-command mapping
+5|ScreenOS permanent-route state has no lossless Junos static-route mapping
+6|BGP instance "blue-vr" has no local AS
+7|source-based and source-interface routes are unsupported

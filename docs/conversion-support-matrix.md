@@ -17,7 +17,13 @@ and the limitations that must be resolved before expanding coverage.
   [global policy evaluation](https://www.juniper.net/documentation/us/en/software/junos/security-policies/topics/topic-map/security-global-policies.html),
   [security-zone interfaces](https://www.juniper.net/documentation/us/en/software/junos/security-policies/topics/topic-map/security-zone-configuration.html),
   [interface addresses](https://www.juniper.net/documentation/us/en/software/junos/interfaces-fundamentals/topics/topic-map/protocol-family-interface-address-properties.html),
-  and [VLAN tagging](https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/statement/vlan-tagging-edit-interfaces.html).
+  [VLAN tagging](https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/statement/vlan-tagging-edit-interfaces.html),
+  [static routes](https://www.juniper.net/documentation/us/en/software/junos/cli-reference/topics/ref/statement/static-edit-routing-options.html),
+  [routing instances](https://www.juniper.net/documentation/us/en/software/junos/routing-overview/topics/concept/routing-instances-overview.html),
+  [BGP groups and neighbors](https://www.juniper.net/documentation/us/en/software/junos/bgp/topics/topic-map/bgp-peering-sessions.html),
+  [NAT processing and rule ordering](https://www.juniper.net/documentation/us/en/software/junos/nat/topics/topic-map/security-nat-overview.html),
+  [source NAT](https://www.juniper.net/documentation/us/en/software/junos/nat/topics/topic-map/nat-security-source-and-source-pool.html),
+  and [static NAT](https://www.juniper.net/documentation/us/en/software/junos/nat/topics/topic-map/security-nat-static.html).
 
 Do not add a command form until its ScreenOS source syntax, Junos equivalent,
 fixture, and unsupported-path behaviour are recorded here. This avoids silently
@@ -51,14 +57,22 @@ turning an assumption into a migration guarantee.
 | `set interface mgt ...` | `set interfaces fxp0 unit 0 ...` in `System-Management` | **Supported.** CIDR IPv4/IPv6 address, description, administrative state, and zone are supported; management MTU is diagnosed as non-portable. | Positive and negative interface fixtures |
 | `set interface tunnel.U ...` | `set interfaces st0 unit U ...` | **Supported.** CIDR IPv4/IPv6 address, description, MTU, administrative state, zone, and IPv4 `ip unnumbered interface DONOR` are supported. Donors must resolve to a converted numbered interface. | Positive and negative interface fixtures |
 | `set interface (vlanU\|vlan.U) [tag VLAN] ...` | VLAN `screenos_vlan_VLAN` with `l3-interface irb.U`, plus `set interfaces irb unit U ...` | **Supported.** The unit is used as the VLAN ID when `tag` is omitted. Description, CIDR IPv4/IPv6 address, MTU, administrative state, and zone are supported. | Interface fixture |
+| `set vrouter VR route PREFIX interface IF [gateway IP] [metric N] [preference N] [tag N]` | Primary `routing-options static route` hierarchy for `trust-vr`; other VRs become `routing-instances NAME instance-type virtual-router` with referenced logical interfaces attached | **Supported.** IPv4/IPv6 prefixes and gateways, interface-only next hops, default routes, null/discard routes, metrics, preferences, and tags are deterministic. Interfaces must have emitted logical units. ScreenOS route descriptions and `permanent` state are diagnosed because Junos has no lossless equivalent `set` command. Source-based routes are unsupported. | Routing, negative-routing, and end-to-end fixtures |
+| `set vrouter VR protocol bgp AS`, `router-id IP`, `enable`, and `neighbor (IP\|peer-group NAME) ...` | Primary or per-routing-instance `routing-options` and `protocols bgp group` hierarchies | **Supported subset.** Named peer groups and ungrouped IPv4/IPv6 peers support `remote-as`, `hold-time`, `md5-authentication`, `route-map NAME (in\|out)`, `local-ip`, `src-interface`/`outgoing-interface`, peer-group membership, and explicit enablement. Source interfaces resolve to emitted interface addresses. Route-map names become Junos import/export policy references; this converter does not define the referenced policy statements. An explicit ScreenOS keepalive is lossless only when it is one-third of hold time, which Junos derives automatically. | Routing and negative-routing fixtures plus normalized-model tests |
+| `set interface IF mip MAPPED host HOST [vrouter VR] [netmask MASK]` | Global host address plus `security nat static rule-set` from the converted interface; same-subnet mappings also emit `security nat proxy-arp` | **Supported for aligned IPv4 one-to-one or equal-prefix mappings.** Generated MIP names resolve in converted policies, and custom host routing instances are declared. Static NAT is rendered before source NAT to preserve Junos processing precedence. | NAT fixture and normalized-model tests |
+| `set interface IF dip ID START [END] [fix-port]` | `security nat source pool screenos_dip_ID`; same-subnet pools also emit proxy ARP | **Supported for IPv4 pool IDs 4–1023.** `fix-port` maps to `port no-translation`. Extended-IP, incoming, random-port, and shifted DIP variants are diagnosed instead of partially converted. | NAT and negative-NAT fixtures |
+| `set policy id NUMBER ... nat src [dip-id ID] permit` | Zone-pair `security nat source rule-set` ordered by the normalized policy pipeline; action uses a DIP pool or `source-nat interface` | **Supported.** Address objects and sets must resolve completely to IP prefixes, services must resolve to Junos applications, DIP interfaces must belong to the policy destination zone, and disabled policies omit both policy and NAT output. Global NAT-src and policy NAT-dst are diagnosed because their required context or semantics are not represented by this subset. | NAT, negative-NAT, and end-to-end fixtures |
 
 ## Explicitly unsupported work
 
-- Static routes and BGP: #20
-- NAT: #17
 - IPsec VPN: #21
 - IDP rules: #26
 - Alternate XML output or input: #4
+- Source-based routing, BGP redistribution/network origination, route-map
+  definitions, and BGP options outside the table above.
+- ScreenOS `set interface IF nat` mode without explicit policy destination
+  context, policy NAT-dst/VIP, and extended, incoming, random-port, or shifted
+  DIP variants.
 
 ## Contribution checklist
 

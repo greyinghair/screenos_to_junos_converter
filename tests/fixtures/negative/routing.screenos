@@ -1,0 +1,7 @@
+set interface ethernet0/0 zone Untrust
+set vrouter trust-vr route not-a-prefix interface ethernet0/0
+set vrouter trust-vr route 198.51.100.0/24 interface ethernet9/9
+set vrouter trust-vr route 203.0.113.0/24 interface ethernet0/0 gateway 192.0.2.1 description "legacy route"
+set vrouter trust-vr route 192.0.2.0/24 interface null permanent
+set vrouter blue-vr protocol bgp enable
+set vrouter trust-vr route source in-interface ethernet0/0 192.0.2.0/24 vrouter untrust-vr

@@ -1,0 +1,33 @@
+set applications application udp_161 protocol udp destination-port 161
+set applications application-set junos-dns application junos-dns-udp
+set applications application-set junos-dns application junos-dns-tcp
+set interfaces ge-0/0/0 unit 0 family inet address 203.0.113.2/24
+set security zones security-zone Untrust interfaces ge-0/0/0.0
+set interfaces st0 unit 7 family inet address 192.0.2.1/30
+set security zones security-zone VPN interfaces st0.7
+set interfaces st0 unit 8 family inet address 192.0.2.5/30
+set security zones security-zone Customer interfaces st0.8
+set routing-options static route 0.0.0.0/0 next-hop 203.0.113.1
+set routing-options static route 0.0.0.0/0 preference 10
+set routing-options static route 198.51.100.0/24 next-hop st0.7
+set routing-options static route 198.51.100.0/24 metric 5
+set routing-options static route 198.51.100.0/24 tag 200
+set routing-instances customer_vr instance-type virtual-router
+set routing-instances customer_vr interface st0.8
+set routing-instances customer_vr routing-options static route 192.0.2.128/25 next-hop 192.0.2.6
+set routing-options autonomous-system 64500
+set routing-options router-id 192.0.2.1
+set protocols bgp group transit_peers type external
+set protocols bgp group transit_peers peer-as 64501
+set protocols bgp group transit_peers family inet unicast
+set protocols bgp group transit_peers local-address 203.0.113.2
+set protocols bgp group transit_peers hold-time 90
+set protocols bgp group transit_peers authentication-key "test-key"
+set protocols bgp group transit_peers import inbound_filter
+set protocols bgp group transit_peers export outbound_filter
+set protocols bgp group transit_peers neighbor 198.51.100.1
+set protocols bgp group transit_peers neighbor 198.51.100.2
+set protocols bgp group ipv6_transit type external
+set protocols bgp group ipv6_transit peer-as 64502
+set protocols bgp group ipv6_transit family inet6 unicast
+set protocols bgp group ipv6_transit neighbor 2001:db8::2

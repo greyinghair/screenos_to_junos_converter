@@ -11,9 +11,17 @@ from pathlib import Path
 from typing import Final
 
 from .conversion_models import (
+    BgpInstanceModel,
+    BgpOptions,
+    BgpPeerGroupModel,
+    BgpPeerModel,
+    DipPoolModel,
     InterfaceModel,
+    MipModel,
     PolicyModel,
     PolicyReference,
+    SourceNatRuleModel,
+    StaticRouteModel,
     map_screenos_interface,
 )
 from .convert_service import convert_service_in_file, is_supported_service_definition
@@ -126,6 +134,7 @@ RE_GROUP_ADDRESS: Final[re.Pattern[str]] = re.compile(
 )
 RE_POLICY: Final[re.Pattern[str]] = re.compile(r"^set policy(?:\s|$)")
 RE_INTERFACE: Final[re.Pattern[str]] = re.compile(r"^set interface(?:\s|$)")
+RE_VROUTER: Final[re.Pattern[str]] = re.compile(r"^set vrouter(?:\s|$)")
 RE_ADDRESS: Final[re.Pattern[str]] = re.compile(
     r'^set address\s+"(?P<zone>[^"]+)"\s+"(?P<name>[^"]+)"\s+'
     r"(?P<value>\S+)(?:\s+(?P<mask>\d{1,3}(?:\.\d{1,3}){3}))?"
@@ -164,10 +173,15 @@ class ConversionState:
     address_group_ns_to_junos_address_set: dict[str, str] = field(default_factory=dict)
     address_and_set_dicts: dict[str, str] = field(default_factory=dict)
     address_objects_by_zone: dict[tuple[str, str], str] = field(default_factory=dict)
+    address_prefixes_by_zone: dict[tuple[str, str], list[str]] = field(
+        default_factory=dict
+    )
+    non_ip_address_keys: set[tuple[str, str]] = field(default_factory=set)
     address_set_keys: set[tuple[str, str]] = field(default_factory=set)
 
     interfaces: dict[str, InterfaceModel] = field(default_factory=dict)
     interface_ns_to_junos: dict[str, str] = field(default_factory=dict)
+    rendered_interfaces: set[str] = field(default_factory=set)
     policies: list[PolicyModel] = field(default_factory=list)
     current_policy: PolicyModel | None = None
     disabled_policy_keys: set[tuple[str, str]] = field(default_factory=set)
@@ -178,6 +192,14 @@ class ConversionState:
         default_factory=list
     )
     reported_disabled_policy_keys: set[tuple[str, str]] = field(default_factory=set)
+
+    static_routes: list[StaticRouteModel] = field(default_factory=list)
+    bgp_instances: dict[str, BgpInstanceModel] = field(default_factory=dict)
+    routing_instance_interfaces: dict[str, set[str]] = field(default_factory=dict)
+
+    mips: list[MipModel] = field(default_factory=list)
+    dip_pools: dict[int, DipPoolModel] = field(default_factory=dict)
+    source_nat_rules: list[SourceNatRuleModel] = field(default_factory=list)
 
     converted_config: list[str] = field(default_factory=list)
     diagnostics: list[ConversionDiagnostic] = field(default_factory=list)
@@ -256,6 +278,8 @@ class Converter:
                     self.state.current_policy = None
                     if RE_INTERFACE.search(line):
                         self.parse_interface_line(line, linecount)
+                    elif RE_VROUTER.search(line):
+                        self.parse_vrouter_line(line, linecount)
                     elif is_supported_service_definition(line):
                         self._parse_service_line(line, linecount)
                     elif RE_GROUP_SERVICE.search(line):
@@ -272,7 +296,10 @@ class Converter:
                         )
 
         self.render_interfaces()
-        self.render_policies()
+        self.render_routing()
+        ordered_policies = self._ordered_policies()
+        self.render_nat(ordered_policies)
+        self.render_policies(ordered_policies)
         self.state.diagnostics.sort(
             key=lambda diagnostic: (
                 diagnostic.line_number is None,
@@ -393,6 +420,9 @@ class Converter:
         if mask is not None:
             try:
                 prefix_cidr = IP(f"{value}/{mask}", make_net=True)
+                normalized_prefix = str(
+                    ipaddress.ip_network(f"{value}/{mask}", strict=False)
+                )
                 if zone.lower() == "global":
                     converted_line = (
                         f"set security address-book global address "
@@ -411,6 +441,7 @@ class Converter:
                 )
                 return
         else:
+            normalized_prefix = None
             try:
                 IP(value, make_net=False)
             except ValueError:
@@ -437,6 +468,11 @@ class Converter:
         self.state.address_objects_by_zone[(zone.lower(), ns_address)] = (
             junos_address_name
         )
+        self.state.address_prefixes_by_zone[(zone.lower(), ns_address)] = (
+            [normalized_prefix] if normalized_prefix is not None else []
+        )
+        if normalized_prefix is None:
+            self.state.non_ip_address_keys.add((zone.lower(), ns_address))
         self.combine_dicts("address")
         self.convert_config(converted_line)
 
@@ -466,6 +502,19 @@ class Converter:
         self.state.address_objects_by_zone[(zone.lower(), ns_address_grp)] = (
             junos_address_set
         )
+        member_prefixes = self.state.address_prefixes_by_zone.get(
+            (zone.lower(), ns_address),
+            [],
+        )
+        group_prefixes = self.state.address_prefixes_by_zone.setdefault(
+            (zone.lower(), ns_address_grp),
+            [],
+        )
+        group_prefixes.extend(
+            prefix for prefix in member_prefixes if prefix not in group_prefixes
+        )
+        if (zone.lower(), ns_address) in self.state.non_ip_address_keys:
+            self.state.non_ip_address_keys.add((zone.lower(), ns_address_grp))
         self.combine_dicts("address")
 
         member_kind = (
@@ -522,6 +571,33 @@ class Converter:
             self.state.interface_ns_to_junos[screenos_name] = mapping.logical_name
 
         attributes = tokens[3:]
+        if attributes and attributes[0].lower() == "mip":
+            self.parse_mip_definition(
+                screenos_name,
+                attributes,
+                line,
+                line_number,
+            )
+            return
+        if attributes and attributes[0].lower() == "dip":
+            self.parse_dip_definition(
+                screenos_name,
+                attributes,
+                line,
+                line_number,
+            )
+            return
+        if [attribute.lower() for attribute in attributes] == ["nat"]:
+            self.record_failure(
+                line,
+                (
+                    "interface NAT mode has no explicit destination context; "
+                    "use policy NAT-src for a lossless conversion"
+                ),
+                line_number,
+            )
+            return
+
         if len(attributes) == 2 and attributes[0].lower() == "zone":
             model.zone = self.remember_zone(attributes[1])
         elif len(attributes) == 2 and attributes[0].lower() == "description":
@@ -637,6 +713,177 @@ class Converter:
 
         model.configured = True
 
+    def parse_mip_definition(
+        self,
+        interface: str,
+        attributes: list[str],
+        line: str,
+        line_number: int,
+    ) -> None:
+        if (
+            len(attributes) < 4
+            or attributes[0].lower() != "mip"
+            or attributes[2].lower() != "host"
+        ):
+            self.record_failure(line, "malformed MIP definition", line_number)
+            return
+
+        mapped_address = attributes[1]
+        host_address = attributes[3]
+        netmask = "255.255.255.255"
+        vrouter = "trust-vr"
+        index = 4
+        while index < len(attributes):
+            option = attributes[index].lower()
+            if option == "netmask" and index + 1 < len(attributes):
+                netmask = attributes[index + 1]
+                index += 2
+            elif option == "vrouter" and index + 1 < len(attributes):
+                vrouter = attributes[index + 1]
+                index += 2
+            else:
+                self.record_failure(
+                    line,
+                    f"unsupported MIP option: {' '.join(attributes[index:])}",
+                    line_number,
+                )
+                return
+
+        try:
+            parsed_mapped_address = ipaddress.ip_address(mapped_address)
+            parsed_host_address = ipaddress.ip_address(host_address)
+            mapped_prefix = ipaddress.ip_network(
+                f"{mapped_address}/{netmask}",
+                strict=False,
+            )
+            host_prefix = ipaddress.ip_network(
+                f"{host_address}/{netmask}",
+                strict=False,
+            )
+        except ValueError:
+            self.record_failure(
+                line,
+                "invalid MIP address or netmask",
+                line_number,
+            )
+            return
+        if mapped_prefix.version != 4 or host_prefix.version != 4:
+            self.record_failure(line, "MIP conversion supports IPv4 only", line_number)
+            return
+        if (
+            parsed_mapped_address != mapped_prefix.network_address
+            or parsed_host_address != host_prefix.network_address
+        ):
+            self.record_failure(
+                line,
+                "MIP ranges must begin on their netmask boundary",
+                line_number,
+            )
+            return
+        if any(mip.mapped_prefix == str(mapped_prefix) for mip in self.state.mips):
+            self.record_failure(
+                line,
+                f"duplicate MIP prefix {mapped_prefix}",
+                line_number,
+            )
+            return
+
+        self.state.mips.append(
+            MipModel(
+                interface=interface,
+                mapped_prefix=str(mapped_prefix),
+                host_prefix=str(host_prefix),
+                vrouter=vrouter,
+                line_number=line_number,
+                source_line=line,
+            )
+        )
+
+    def parse_dip_definition(
+        self,
+        interface: str,
+        attributes: list[str],
+        line: str,
+        line_number: int,
+    ) -> None:
+        if len(attributes) < 3 or attributes[0].lower() != "dip":
+            self.record_failure(line, "malformed DIP definition", line_number)
+            return
+
+        try:
+            pool_id = int(attributes[1])
+        except ValueError:
+            pool_id = -1
+        if not 4 <= pool_id <= 1023:
+            self.record_failure(
+                line,
+                "DIP pool id must be between 4 and 1023",
+                line_number,
+            )
+            return
+
+        option_names = {"fix-port", "incoming", "random-port", "shift-from"}
+        address_tokens: list[str] = []
+        index = 2
+        while index < len(attributes) and attributes[index].lower() not in option_names:
+            address_tokens.append(attributes[index])
+            index += 1
+        if not 1 <= len(address_tokens) <= 2:
+            self.record_failure(line, "malformed DIP address range", line_number)
+            return
+
+        options = [option.lower() for option in attributes[index:]]
+        if any(
+            option in options for option in ("incoming", "random-port", "shift-from")
+        ):
+            self.record_failure(
+                line,
+                f"unsupported DIP variant: {' '.join(attributes[index:])}",
+                line_number,
+            )
+            return
+        if options not in ([], ["fix-port"]):
+            self.record_failure(
+                line,
+                f"unsupported DIP option: {' '.join(attributes[index:])}",
+                line_number,
+            )
+            return
+
+        try:
+            start = ipaddress.ip_address(address_tokens[0])
+            end = ipaddress.ip_address(address_tokens[-1])
+        except ValueError:
+            self.record_failure(line, "invalid DIP address range", line_number)
+            return
+        if start.version != 4 or end.version != 4:
+            self.record_failure(line, "DIP conversion supports IPv4 only", line_number)
+            return
+        if int(end) < int(start):
+            self.record_failure(
+                line,
+                "DIP range end must not precede its start",
+                line_number,
+            )
+            return
+        if pool_id in self.state.dip_pools:
+            self.record_failure(
+                line,
+                f"duplicate DIP pool id {pool_id}",
+                line_number,
+            )
+            return
+
+        self.state.dip_pools[pool_id] = DipPoolModel(
+            interface=interface,
+            pool_id=pool_id,
+            start_address=str(start),
+            end_address=str(end),
+            fixed_port=options == ["fix-port"],
+            line_number=line_number,
+            source_line=line,
+        )
+
     def render_interfaces(self) -> None:
         renderable: dict[str, InterfaceModel] = {}
         for name, model in self.state.interfaces.items():
@@ -683,6 +930,7 @@ class Converter:
             mapping = model.mapping
             physical = mapping.physical_name
             unit_prefix = f"set interfaces {physical} unit {mapping.unit}"
+            output_start = len(self.state.converted_config)
 
             if mapping.kind == "ethernet" and mapping.unit != 0:
                 if physical not in tagged_physical_interfaces:
@@ -762,6 +1010,822 @@ class Converter:
                     f"set security zones security-zone {model.zone} interfaces "
                     f"{mapping.logical_name}"
                 )
+
+            if any(
+                output_line.startswith(unit_prefix)
+                for output_line in self.state.converted_config[output_start:]
+            ):
+                self.state.rendered_interfaces.add(model.screenos_name)
+
+    @staticmethod
+    def junos_vrouter_name(vrouter: str) -> str | None:
+        """Map the ScreenOS default VR to Junos' primary routing instance."""
+
+        if vrouter.lower() == "trust-vr":
+            return None
+        return sanity_check_naming(vrouter)
+
+    def parse_vrouter_line(self, line: str, line_number: int) -> None:
+        try:
+            tokens = shlex.split(line)
+        except ValueError:
+            self.record_failure(
+                line, "malformed virtual-router definition", line_number
+            )
+            return
+
+        if len(tokens) < 5 or tokens[:2] != ["set", "vrouter"]:
+            self.record_failure(
+                line, "malformed virtual-router definition", line_number
+            )
+            return
+
+        vrouter = tokens[2]
+        command = tokens[3].lower()
+        if command == "route":
+            self.parse_static_route(vrouter, tokens[4:], line, line_number)
+        elif command == "protocol" and len(tokens) >= 6:
+            if tokens[4].lower() != "bgp":
+                self.record_failure(
+                    line,
+                    f"unsupported routing protocol: {tokens[4]}",
+                    line_number,
+                )
+                return
+            self.parse_bgp_line(vrouter, tokens[5:], line, line_number)
+        else:
+            self.record_failure(
+                line,
+                f"unsupported virtual-router command: {' '.join(tokens[3:])}",
+                line_number,
+            )
+
+    def parse_static_route(
+        self,
+        vrouter: str,
+        tokens: list[str],
+        line: str,
+        line_number: int,
+    ) -> None:
+        if not tokens or tokens[0].lower() in ("source", "in-interface"):
+            self.record_failure(
+                line,
+                "source-based and source-interface routes are unsupported",
+                line_number,
+            )
+            return
+
+        try:
+            destination = ipaddress.ip_network(tokens[0], strict=False)
+        except ValueError:
+            self.record_failure(line, "invalid static-route prefix", line_number)
+            return
+
+        interface = None
+        gateway = None
+        preference = None
+        metric = None
+        tag = None
+        description = None
+        permanent = False
+        index = 1
+        while index < len(tokens):
+            option = tokens[index].lower()
+            if option == "interface" and index + 1 < len(tokens):
+                interface = tokens[index + 1]
+                index += 2
+            elif option == "gateway" and index + 1 < len(tokens):
+                try:
+                    parsed_gateway = ipaddress.ip_address(tokens[index + 1])
+                except ValueError:
+                    self.record_failure(
+                        line,
+                        "invalid static-route gateway",
+                        line_number,
+                    )
+                    return
+                if parsed_gateway.version != destination.version:
+                    self.record_failure(
+                        line,
+                        "static-route gateway and prefix use different IP families",
+                        line_number,
+                    )
+                    return
+                gateway = str(parsed_gateway)
+                index += 2
+            elif option in ("preference", "metric", "tag") and index + 1 < len(tokens):
+                try:
+                    value = int(tokens[index + 1])
+                except ValueError:
+                    self.record_failure(
+                        line,
+                        f"static-route {option} must be numeric",
+                        line_number,
+                    )
+                    return
+                if option == "preference":
+                    if not 0 <= value <= 255:
+                        self.record_failure(
+                            line,
+                            "static-route preference must be between 0 and 255",
+                            line_number,
+                        )
+                        return
+                    preference = value
+                elif option == "metric":
+                    if not 1 <= value <= 65535:
+                        self.record_failure(
+                            line,
+                            "static-route metric must be between 1 and 65535",
+                            line_number,
+                        )
+                        return
+                    metric = value
+                else:
+                    if not 0 <= value <= 4_294_967_295:
+                        self.record_failure(
+                            line,
+                            "static-route tag must be between 0 and 4294967295",
+                            line_number,
+                        )
+                        return
+                    tag = value
+                index += 2
+            elif option == "description" and index + 1 < len(tokens):
+                description = tokens[index + 1]
+                index += 2
+            elif option == "permanent":
+                permanent = True
+                index += 1
+            else:
+                self.record_failure(
+                    line,
+                    f"unsupported static-route option: {' '.join(tokens[index:])}",
+                    line_number,
+                )
+                return
+
+        if interface is None and gateway is None:
+            self.record_failure(
+                line,
+                "static route requires an interface or gateway",
+                line_number,
+            )
+            return
+
+        route = StaticRouteModel(
+            vrouter=vrouter,
+            destination=str(destination),
+            interface=interface,
+            gateway=gateway,
+            preference=preference,
+            metric=metric,
+            tag=tag,
+            description=description,
+            permanent=permanent,
+            line_number=line_number,
+            source_line=line,
+        )
+        if route in self.state.static_routes:
+            self.record_failure(line, "duplicate static route", line_number)
+            return
+        self.state.static_routes.append(route)
+
+    def _bgp_instance(
+        self,
+        vrouter: str,
+        line: str,
+        line_number: int,
+    ) -> BgpInstanceModel:
+        instance = self.state.bgp_instances.get(vrouter)
+        if instance is None:
+            instance = BgpInstanceModel(
+                vrouter=vrouter,
+                line_number=line_number,
+                source_line=line,
+            )
+            self.state.bgp_instances[vrouter] = instance
+        return instance
+
+    def parse_bgp_line(
+        self,
+        vrouter: str,
+        tokens: list[str],
+        line: str,
+        line_number: int,
+    ) -> None:
+        if not tokens:
+            self.record_failure(line, "malformed BGP definition", line_number)
+            return
+
+        instance = self._bgp_instance(vrouter, line, line_number)
+        if len(tokens) == 1 and tokens[0].isdigit():
+            local_as = int(tokens[0])
+            if not 1 <= local_as <= 4_294_967_295:
+                self.record_failure(line, "BGP AS number is out of range", line_number)
+                return
+            instance.local_as = local_as
+            return
+        if [token.lower() for token in tokens] == ["enable"]:
+            instance.enabled = True
+            return
+        if len(tokens) == 2 and tokens[0].lower() == "router-id":
+            try:
+                router_id = ipaddress.ip_address(tokens[1])
+            except ValueError:
+                self.record_failure(line, "invalid BGP router id", line_number)
+                return
+            if router_id.version != 4:
+                self.record_failure(line, "BGP router id must be IPv4", line_number)
+                return
+            instance.router_id = str(router_id)
+            return
+
+        family = "inet"
+        if tokens[0].lower() in ("ipv4", "ipv6"):
+            family = "inet" if tokens[0].lower() == "ipv4" else "inet6"
+            tokens = tokens[1:]
+        if len(tokens) < 3 or tokens[0].lower() != "neighbor":
+            self.record_failure(
+                line,
+                f"unsupported BGP command: {' '.join(tokens)}",
+                line_number,
+            )
+            return
+
+        if tokens[1].lower() == "peer-group":
+            if len(tokens) < 4:
+                self.record_failure(line, "malformed BGP peer group", line_number)
+                return
+            group_name = tokens[2]
+            group = instance.peer_groups.get(group_name)
+            if group is None:
+                group = BgpPeerGroupModel(
+                    name=group_name,
+                    line_number=line_number,
+                    source_line=line,
+                )
+                instance.peer_groups[group_name] = group
+            if not self._apply_bgp_options(
+                group.options,
+                tokens[3:],
+                line,
+                line_number,
+            ):
+                return
+            return
+
+        try:
+            address = ipaddress.ip_address(tokens[1])
+        except ValueError:
+            self.record_failure(line, "invalid BGP neighbor address", line_number)
+            return
+        expected_family = "inet" if address.version == 4 else "inet6"
+        if family != expected_family:
+            self.record_failure(
+                line,
+                "BGP address-family keyword does not match neighbor address",
+                line_number,
+            )
+            return
+
+        address_text = str(address)
+        peer = instance.peers.get(address_text)
+        if peer is None:
+            peer = BgpPeerModel(
+                address=address_text,
+                family=family,
+                line_number=line_number,
+                source_line=line,
+            )
+            instance.peers[address_text] = peer
+
+        options = tokens[2:]
+        option = options[0].lower()
+        if option == "peer-group" and len(options) == 2:
+            peer.peer_group = options[1]
+            if options[1] not in instance.peer_groups:
+                instance.peer_groups[options[1]] = BgpPeerGroupModel(
+                    name=options[1],
+                    line_number=line_number,
+                    source_line=line,
+                )
+            return
+        if option in ("enable", "activate") and len(options) == 1:
+            peer.enabled = True
+            return
+        self._apply_bgp_options(peer.options, options, line, line_number)
+
+    def _apply_bgp_options(
+        self,
+        options: BgpOptions,
+        tokens: list[str],
+        line: str,
+        line_number: int,
+    ) -> bool:
+        if not tokens:
+            self.record_failure(line, "missing BGP peer option", line_number)
+            return False
+
+        index = 0
+        while index < len(tokens):
+            option = tokens[index].lower()
+            if option == "remote-as" and index + 1 < len(tokens):
+                try:
+                    remote_as = int(tokens[index + 1])
+                except ValueError:
+                    remote_as = 0
+                if not 1 <= remote_as <= 4_294_967_295:
+                    self.record_failure(
+                        line,
+                        "BGP remote AS number is out of range",
+                        line_number,
+                    )
+                    return False
+                options.remote_as = remote_as
+                options.option_sources["remote-as"] = (line_number, line)
+                index += 2
+            elif option in ("hold-time", "keepalive") and index + 1 < len(tokens):
+                try:
+                    timer = int(tokens[index + 1])
+                except ValueError:
+                    timer = -1
+                if not 0 <= timer <= 65_535:
+                    self.record_failure(
+                        line,
+                        f"BGP {option} must be between 0 and 65535",
+                        line_number,
+                    )
+                    return False
+                if option == "hold-time":
+                    options.hold_time = timer
+                else:
+                    options.keepalive = timer
+                options.option_sources[option] = (line_number, line)
+                index += 2
+            elif option == "md5-authentication" and index + 1 < len(tokens):
+                options.authentication_key = tokens[index + 1]
+                options.option_sources["md5-authentication"] = (line_number, line)
+                index += 2
+            elif option == "route-map" and index + 2 < len(tokens):
+                direction = tokens[index + 2].lower()
+                if direction not in ("in", "out"):
+                    self.record_failure(
+                        line,
+                        "BGP route-map direction must be 'in' or 'out'",
+                        line_number,
+                    )
+                    return False
+                policy = sanity_check_naming(tokens[index + 1])
+                if direction == "in":
+                    options.import_policy = policy
+                else:
+                    options.export_policy = policy
+                options.option_sources[f"route-map-{direction}"] = (line_number, line)
+                index += 3
+            elif option in ("src-interface", "outgoing-interface") and index + 1 < len(
+                tokens
+            ):
+                options.source_interface = tokens[index + 1]
+                options.option_sources["source-interface"] = (line_number, line)
+                index += 2
+            elif option == "local-ip" and index + 1 < len(tokens):
+                try:
+                    local_address = ipaddress.ip_interface(tokens[index + 1]).ip
+                except ValueError:
+                    self.record_failure(
+                        line,
+                        "invalid BGP local IP address",
+                        line_number,
+                    )
+                    return False
+                options.local_address = str(local_address)
+                options.option_sources["local-address"] = (line_number, line)
+                index += 2
+            else:
+                self.record_failure(
+                    line,
+                    f"unsupported BGP peer option: {' '.join(tokens[index:])}",
+                    line_number,
+                )
+                return False
+        return True
+
+    def _ensure_routing_instance(
+        self,
+        vrouter: str,
+        emitted_instances: set[str],
+    ) -> str | None:
+        junos_name = self.junos_vrouter_name(vrouter)
+        if junos_name is not None and junos_name not in emitted_instances:
+            self.convert_config(
+                f"set routing-instances {junos_name} instance-type virtual-router"
+            )
+            emitted_instances.add(junos_name)
+        return junos_name
+
+    def _attach_routing_interface(
+        self,
+        vrouter: str,
+        screenos_interface: str,
+        line: str,
+        line_number: int,
+    ) -> bool:
+        junos_name = self.junos_vrouter_name(vrouter)
+        if junos_name is None:
+            return True
+        mapping = self.state.interface_ns_to_junos.get(screenos_interface)
+        if mapping is None or screenos_interface not in self.state.rendered_interfaces:
+            self.record_failure(
+                line,
+                f'undefined routing interface: "{screenos_interface}"',
+                line_number,
+            )
+            return False
+
+        for owner, interfaces in self.state.routing_instance_interfaces.items():
+            if owner != junos_name and screenos_interface in interfaces:
+                self.record_failure(
+                    line,
+                    (
+                        f'interface "{screenos_interface}" is already assigned '
+                        f"to routing instance {owner}"
+                    ),
+                    line_number,
+                )
+                return False
+
+        interfaces = self.state.routing_instance_interfaces.setdefault(
+            junos_name,
+            set(),
+        )
+        if screenos_interface not in interfaces:
+            self.convert_config(
+                f"set routing-instances {junos_name} interface {mapping}"
+            )
+            interfaces.add(screenos_interface)
+        return True
+
+    @staticmethod
+    def _routing_options_prefix(vrouter: str) -> str:
+        junos_name = Converter.junos_vrouter_name(vrouter)
+        if junos_name is None:
+            return "set routing-options"
+        return f"set routing-instances {junos_name} routing-options"
+
+    @staticmethod
+    def _bgp_prefix(vrouter: str) -> str:
+        junos_name = Converter.junos_vrouter_name(vrouter)
+        if junos_name is None:
+            return "set protocols bgp"
+        return f"set routing-instances {junos_name} protocols bgp"
+
+    def render_routing(self) -> None:
+        emitted_instances: set[str] = set()
+        for route in self.state.static_routes:
+            mapped_interface = None
+            if route.interface is not None and route.interface.lower() != "null":
+                mapped_interface = self.state.interface_ns_to_junos.get(route.interface)
+                if (
+                    mapped_interface is None
+                    or route.interface not in self.state.rendered_interfaces
+                ):
+                    self.record_failure(
+                        route.source_line,
+                        f'undefined routing interface: "{route.interface}"',
+                        route.line_number,
+                    )
+                    continue
+
+            self._ensure_routing_instance(route.vrouter, emitted_instances)
+            if (
+                route.interface is not None
+                and route.interface.lower() != "null"
+                and not self._attach_routing_interface(
+                    route.vrouter,
+                    route.interface,
+                    route.source_line,
+                    route.line_number,
+                )
+            ):
+                continue
+
+            prefix = (
+                f"{self._routing_options_prefix(route.vrouter)} static route "
+                f"{route.destination}"
+            )
+            if route.interface is not None and route.interface.lower() == "null":
+                self.convert_config(f"{prefix} discard")
+            elif route.gateway is not None:
+                self.convert_config(f"{prefix} next-hop {route.gateway}")
+            elif mapped_interface is not None:
+                self.convert_config(f"{prefix} next-hop {mapped_interface}")
+
+            if route.preference is not None:
+                self.convert_config(f"{prefix} preference {route.preference}")
+            if route.metric is not None:
+                self.convert_config(f"{prefix} metric {route.metric}")
+            if route.tag is not None:
+                self.convert_config(f"{prefix} tag {route.tag}")
+            if route.description is not None:
+                self.record_failure(
+                    route.source_line,
+                    (
+                        "static-route description has no portable Junos "
+                        "set-command mapping"
+                    ),
+                    route.line_number,
+                )
+            if route.permanent:
+                self.record_failure(
+                    route.source_line,
+                    (
+                        "ScreenOS permanent-route state has no lossless Junos "
+                        "static-route mapping"
+                    ),
+                    route.line_number,
+                )
+
+        for instance in self.state.bgp_instances.values():
+            self._render_bgp_instance(instance, emitted_instances)
+
+    def _bgp_option_source(
+        self,
+        options: BgpOptions,
+        name: str,
+        fallback_line_number: int,
+        fallback_line: str,
+    ) -> tuple[int, str]:
+        return options.option_sources.get(
+            name,
+            (fallback_line_number, fallback_line),
+        )
+
+    def _bgp_local_address(
+        self,
+        options: BgpOptions,
+        vrouter: str,
+        fallback_line_number: int,
+        fallback_line: str,
+    ) -> str | None:
+        if options.local_address is not None:
+            return options.local_address
+        if options.source_interface is None:
+            return None
+
+        line_number, line = self._bgp_option_source(
+            options,
+            "source-interface",
+            fallback_line_number,
+            fallback_line,
+        )
+        interface = self.state.interfaces.get(options.source_interface)
+        if (
+            interface is None
+            or options.source_interface not in self.state.rendered_interfaces
+            or not interface.ipv4_addresses
+        ):
+            self.record_failure(
+                line,
+                (
+                    f'BGP source interface "{options.source_interface}" '
+                    "is undefined or has no IPv4 address"
+                ),
+                line_number,
+            )
+            return ""
+        if not self._attach_routing_interface(
+            vrouter,
+            options.source_interface,
+            line,
+            line_number,
+        ):
+            return ""
+        return str(ipaddress.ip_interface(interface.ipv4_addresses[0]).ip)
+
+    def _render_bgp_options(
+        self,
+        prefix: str,
+        options: BgpOptions,
+        vrouter: str,
+        fallback_line_number: int,
+        fallback_line: str,
+    ) -> bool:
+        local_address = self._bgp_local_address(
+            options,
+            vrouter,
+            fallback_line_number,
+            fallback_line,
+        )
+        if local_address == "":
+            return False
+        if local_address is not None:
+            self.convert_config(f"{prefix} local-address {local_address}")
+        if options.hold_time is not None:
+            self.convert_config(f"{prefix} hold-time {options.hold_time}")
+        if options.keepalive is not None and (
+            options.hold_time is None or options.keepalive * 3 != options.hold_time
+        ):
+            line_number, line = self._bgp_option_source(
+                options,
+                "keepalive",
+                fallback_line_number,
+                fallback_line,
+            )
+            self.record_failure(
+                line,
+                (
+                    "explicit BGP keepalive has no independent Junos mapping; "
+                    "Junos derives it from hold-time"
+                ),
+                line_number,
+            )
+        if options.authentication_key is not None:
+            key = options.authentication_key.replace("\\", "\\\\").replace('"', '\\"')
+            self.convert_config(f'{prefix} authentication-key "{key}"')
+        if options.import_policy is not None:
+            self.convert_config(f"{prefix} import {options.import_policy}")
+        if options.export_policy is not None:
+            self.convert_config(f"{prefix} export {options.export_policy}")
+        return True
+
+    def _render_bgp_instance(
+        self,
+        instance: BgpInstanceModel,
+        emitted_instances: set[str],
+    ) -> None:
+        if instance.local_as is None:
+            self.record_failure(
+                instance.source_line,
+                f'BGP instance "{instance.vrouter}" has no local AS',
+                instance.line_number,
+            )
+            return
+        if not instance.enabled:
+            self.record_failure(
+                instance.source_line,
+                f'disabled BGP instance "{instance.vrouter}" omitted from output',
+                instance.line_number,
+            )
+            return
+
+        self._ensure_routing_instance(instance.vrouter, emitted_instances)
+        routing_prefix = self._routing_options_prefix(instance.vrouter)
+        bgp_prefix = self._bgp_prefix(instance.vrouter)
+        self.convert_config(f"{routing_prefix} autonomous-system {instance.local_as}")
+        if instance.router_id is not None:
+            self.convert_config(f"{routing_prefix} router-id {instance.router_id}")
+
+        rendered_peer_addresses: set[str] = set()
+        seen_group_names: set[str] = set()
+        for screenos_group_name, group in instance.peer_groups.items():
+            group_name = sanity_check_naming(screenos_group_name)
+            if group_name in seen_group_names:
+                self.record_failure(
+                    group.source_line,
+                    f'BGP peer-group name collision after normalization: "{group_name}"',
+                    group.line_number,
+                )
+                continue
+            seen_group_names.add(group_name)
+
+            members = [
+                peer
+                for peer in instance.peers.values()
+                if peer.peer_group == screenos_group_name
+            ]
+            active_members = []
+            for peer in members:
+                if peer.enabled:
+                    active_members.append(peer)
+                else:
+                    self.record_failure(
+                        peer.source_line,
+                        f"disabled BGP neighbor {peer.address} omitted from output",
+                        peer.line_number,
+                    )
+            if not active_members:
+                self.record_failure(
+                    group.source_line,
+                    f'BGP peer group "{screenos_group_name}" has no enabled neighbors',
+                    group.line_number,
+                )
+                continue
+
+            remote_as_values = {
+                peer.options.remote_as
+                for peer in active_members
+                if peer.options.remote_as is not None
+            }
+            if group.options.remote_as is not None:
+                remote_as_values.add(group.options.remote_as)
+            if len(remote_as_values) != 1:
+                self.record_failure(
+                    group.source_line,
+                    (
+                        f'BGP peer group "{screenos_group_name}" requires one '
+                        "consistent remote AS"
+                    ),
+                    group.line_number,
+                )
+                continue
+            remote_as = remote_as_values.pop()
+            if any(
+                peer.options.remote_as not in (None, remote_as)
+                for peer in active_members
+            ):
+                self.record_failure(
+                    group.source_line,
+                    f'BGP peer group "{screenos_group_name}" has conflicting AS values',
+                    group.line_number,
+                )
+                continue
+
+            group_prefix = f"{bgp_prefix} group {group_name}"
+            if (
+                self._bgp_local_address(
+                    group.options,
+                    instance.vrouter,
+                    group.line_number,
+                    group.source_line,
+                )
+                == ""
+            ):
+                continue
+            group_type = "internal" if remote_as == instance.local_as else "external"
+            self.convert_config(f"{group_prefix} type {group_type}")
+            self.convert_config(f"{group_prefix} peer-as {remote_as}")
+            for family in dict.fromkeys(peer.family for peer in active_members):
+                self.convert_config(f"{group_prefix} family {family} unicast")
+            if not self._render_bgp_options(
+                group_prefix,
+                group.options,
+                instance.vrouter,
+                group.line_number,
+                group.source_line,
+            ):
+                continue
+
+            for peer in active_members:
+                peer_prefix = f"{group_prefix} neighbor {peer.address}"
+                if not self._render_bgp_options(
+                    peer_prefix,
+                    peer.options,
+                    instance.vrouter,
+                    peer.line_number,
+                    peer.source_line,
+                ):
+                    continue
+                self.convert_config(peer_prefix)
+                rendered_peer_addresses.add(peer.address)
+
+        for peer in instance.peers.values():
+            if peer.address in rendered_peer_addresses or peer.peer_group is not None:
+                continue
+            if not peer.enabled:
+                self.record_failure(
+                    peer.source_line,
+                    f"disabled BGP neighbor {peer.address} omitted from output",
+                    peer.line_number,
+                )
+                continue
+            if peer.options.remote_as is None:
+                self.record_failure(
+                    peer.source_line,
+                    f"BGP neighbor {peer.address} has no remote AS",
+                    peer.line_number,
+                )
+                continue
+
+            group_name = sanity_check_naming(f"screenos_peer_{peer.address}")
+            peer_group_prefix = f"{bgp_prefix} group {group_name}"
+            if (
+                self._bgp_local_address(
+                    peer.options,
+                    instance.vrouter,
+                    peer.line_number,
+                    peer.source_line,
+                )
+                == ""
+            ):
+                continue
+            group_type = (
+                "internal"
+                if peer.options.remote_as == instance.local_as
+                else "external"
+            )
+            self.convert_config(f"{peer_group_prefix} type {group_type}")
+            self.convert_config(f"{peer_group_prefix} peer-as {peer.options.remote_as}")
+            self.convert_config(f"{peer_group_prefix} family {peer.family} unicast")
+            if not self._render_bgp_options(
+                peer_group_prefix,
+                peer.options,
+                instance.vrouter,
+                peer.line_number,
+                peer.source_line,
+            ):
+                continue
+            self.convert_config(f"{peer_group_prefix} neighbor {peer.address}")
 
     def parse_policy_line(self, line: str, line_number: int) -> None:
         self.state.current_policy = None
@@ -887,15 +1951,72 @@ class Converter:
             return
 
         source_address, destination_address, service = tokens[index : index + 3]
-        action = tokens[index + 3].lower()
-        if action not in ("permit", "deny", "reject"):
+        index += 3
+
+        source_nat_kind = None
+        source_nat_dip_id = None
+        if index < len(tokens) and tokens[index].lower() == "nat":
+            if index + 1 >= len(tokens):
+                self.record_failure(line, "malformed policy NAT option", line_number)
+                return
+            nat_direction = tokens[index + 1].lower()
+            if nat_direction != "src":
+                self.record_failure(
+                    line,
+                    (
+                        "policy NAT-dst is unsupported; use MIP static NAT "
+                        "or migrate the destination mapping manually"
+                    ),
+                    line_number,
+                )
+                return
+            source_nat_kind = "interface"
+            index += 2
+            if index < len(tokens) and tokens[index].lower() == "dip-id":
+                if index + 1 >= len(tokens):
+                    self.record_failure(
+                        line,
+                        "policy DIP reference requires a numeric id",
+                        line_number,
+                    )
+                    return
+                try:
+                    source_nat_dip_id = int(tokens[index + 1])
+                except ValueError:
+                    source_nat_dip_id = -1
+                if not 4 <= source_nat_dip_id <= 1023:
+                    self.record_failure(
+                        line,
+                        "policy DIP id must be between 4 and 1023",
+                        line_number,
+                    )
+                    return
+                source_nat_kind = "pool"
+                index += 2
+
+        if index >= len(tokens):
             self.record_failure(
                 line,
-                f"unsupported policy action: {tokens[index + 3]}",
+                "malformed or unsupported policy definition",
                 line_number,
             )
             return
-        index += 4
+        action = tokens[index].lower()
+        if action not in ("permit", "deny", "reject"):
+            self.record_failure(
+                line,
+                f"unsupported policy action: {tokens[index]}",
+                line_number,
+            )
+            return
+        if source_nat_kind is not None and action != "permit":
+            self.record_failure(
+                line,
+                "policy NAT-src requires a permit action",
+                line_number,
+            )
+            return
+        index += 1
 
         log_enabled = False
         count_enabled = False
@@ -964,6 +2085,17 @@ class Converter:
             disabled=policy_key in self.state.disabled_policy_keys,
         )
         self.state.policies.append(policy)
+        if source_nat_kind is not None:
+            self.state.source_nat_rules.append(
+                SourceNatRuleModel(
+                    policy_scope=scope,
+                    policy_id=policy_id,
+                    kind=source_nat_kind,
+                    dip_id=source_nat_dip_id,
+                    line_number=line_number,
+                    source_line=line,
+                )
+            )
         self.state.current_policy = policy
 
     def _resolve_address(self, name: str, zone: str) -> str | None:
@@ -1077,10 +2209,280 @@ class Converter:
                 )
         return ordered
 
-    def render_policies(self) -> None:
+    def _resolve_address_prefixes(self, name: str, zone: str) -> list[str] | None:
+        if name.lower() == "any":
+            return ["0.0.0.0/0"]
+        zone_key = zone.lower()
+        if (zone_key, name) in self.state.non_ip_address_keys:
+            return None
+        prefixes = self.state.address_prefixes_by_zone.get((zone_key, name))
+        if prefixes is not None:
+            return prefixes or None
+        if zone_key != "global":
+            if ("global", name) in self.state.non_ip_address_keys:
+                return None
+            prefixes = self.state.address_prefixes_by_zone.get(("global", name))
+        return prefixes or None
+
+    def _register_mip_address(self, mip: MipModel) -> bool:
+        mapped_address = str(ipaddress.ip_network(mip.mapped_prefix).network_address)
+        alias = f"MIP({mapped_address})"
+        junos_name = sanity_check_naming(f"mip_{mapped_address}")
+        owner_key = ("Global", junos_name)
+        existing_owner = self.state.address_name_owners.get(owner_key)
+        if existing_owner is not None and existing_owner != alias:
+            self.record_failure(
+                mip.source_line,
+                (
+                    f'MIP address name "{alias}" collides with '
+                    f'"{existing_owner}" after normalization'
+                ),
+                mip.line_number,
+            )
+            return False
+
+        self.state.address_name_owners[owner_key] = alias
+        self.state.address_objects_by_zone[("global", alias)] = junos_name
+        self.state.address_prefixes_by_zone[("global", alias)] = [mip.host_prefix]
+        self.convert_config(
+            f"set security address-book global address {junos_name} {mip.host_prefix}"
+        )
+        return True
+
+    def _interface_network_contains(
+        self,
+        screenos_interface: str,
+        address: str,
+    ) -> bool:
+        model = self.state.interfaces.get(screenos_interface)
+        if model is None:
+            return False
+        parsed_address = ipaddress.ip_address(address)
+        return any(
+            parsed_address in ipaddress.ip_interface(interface_address).network
+            for interface_address in model.ipv4_addresses
+        )
+
+    def render_nat(self, ordered_policies: list[PolicyModel]) -> None:
+        emitted_static_rule_sets: set[str] = set()
+        for mip in self.state.mips:
+            logical_interface = self.state.interface_ns_to_junos.get(mip.interface)
+            if (
+                logical_interface is None
+                or mip.interface not in self.state.rendered_interfaces
+            ):
+                self.record_failure(
+                    mip.source_line,
+                    f'undefined MIP interface: "{mip.interface}"',
+                    mip.line_number,
+                )
+                continue
+            if not self._register_mip_address(mip):
+                continue
+
+            rule_set = sanity_check_naming(f"screenos_mip_{logical_interface}")
+            mapped_address = str(
+                ipaddress.ip_network(mip.mapped_prefix).network_address
+            )
+            rule = sanity_check_naming(f"mip_{mapped_address}")
+            prefix = f"set security nat static rule-set {rule_set} rule {rule}"
+            if rule_set not in emitted_static_rule_sets:
+                self.convert_config(
+                    f"set security nat static rule-set {rule_set} "
+                    f"from interface {logical_interface}"
+                )
+                emitted_static_rule_sets.add(rule_set)
+            self.convert_config(
+                f"{prefix} match destination-address {mip.mapped_prefix}"
+            )
+            mapped_vrouter = self.junos_vrouter_name(mip.vrouter)
+            translation = f"{prefix} then static-nat prefix {mip.host_prefix}"
+            if mapped_vrouter is not None:
+                declaration = (
+                    f"set routing-instances {mapped_vrouter} "
+                    "instance-type virtual-router"
+                )
+                if declaration not in self.state.converted_config:
+                    self.convert_config(declaration)
+                translation = f"{translation} routing-instance {mapped_vrouter}"
+            self.convert_config(translation)
+            mapped_network = ipaddress.ip_network(mip.mapped_prefix)
+            if self._interface_network_contains(
+                mip.interface,
+                str(mapped_network.network_address),
+            ) and self._interface_network_contains(
+                mip.interface,
+                str(mapped_network.broadcast_address),
+            ):
+                self.convert_config(
+                    f"set security nat proxy-arp interface {logical_interface} "
+                    f"address {mip.mapped_prefix}"
+                )
+
+        valid_pool_ids: set[int] = set()
+        for pool in self.state.dip_pools.values():
+            logical_interface = self.state.interface_ns_to_junos.get(pool.interface)
+            if (
+                logical_interface is None
+                or pool.interface not in self.state.rendered_interfaces
+            ):
+                self.record_failure(
+                    pool.source_line,
+                    f'undefined DIP interface: "{pool.interface}"',
+                    pool.line_number,
+                )
+                continue
+
+            pool_name = f"screenos_dip_{pool.pool_id}"
+            if pool.start_address == pool.end_address:
+                address_value = f"{pool.start_address}/32"
+            else:
+                address_value = f"{pool.start_address}/32 to {pool.end_address}/32"
+            self.convert_config(
+                f"set security nat source pool {pool_name} address {address_value}"
+            )
+            if pool.fixed_port:
+                self.convert_config(
+                    f"set security nat source pool {pool_name} port no-translation"
+                )
+            if self._interface_network_contains(
+                pool.interface,
+                pool.start_address,
+            ) and self._interface_network_contains(
+                pool.interface,
+                pool.end_address,
+            ):
+                self.convert_config(
+                    f"set security nat proxy-arp interface {logical_interface} "
+                    f"address {address_value}"
+                )
+            valid_pool_ids.add(pool.pool_id)
+
+        rules_by_policy = {
+            (rule.policy_scope, rule.policy_id): rule
+            for rule in self.state.source_nat_rules
+        }
+        emitted_source_rule_sets: set[tuple[str, str]] = set()
+        for policy in ordered_policies:
+            nat_rule = rules_by_policy.get((policy.scope, policy.policy_id))
+            if nat_rule is None:
+                continue
+            if (
+                policy.disabled
+                or (policy.scope, policy.policy_id) in self.state.disabled_policy_keys
+            ):
+                continue
+            if policy.scope == "global":
+                self.record_failure(
+                    nat_rule.source_line,
+                    (
+                        "global policy NAT-src has no explicit Junos "
+                        "source/destination zone context"
+                    ),
+                    nat_rule.line_number,
+                )
+                continue
+
+            source_zone = policy.source_zone or ""
+            destination_zone = policy.destination_zone or ""
+            if nat_rule.kind == "pool":
+                if nat_rule.dip_id is None or nat_rule.dip_id not in valid_pool_ids:
+                    self.record_failure(
+                        nat_rule.source_line,
+                        f"undefined or unusable DIP pool id {nat_rule.dip_id}",
+                        nat_rule.line_number,
+                    )
+                    continue
+                pool = self.state.dip_pools[nat_rule.dip_id]
+                pool_interface = self.state.interfaces.get(pool.interface)
+                if pool_interface is None or pool_interface.zone != destination_zone:
+                    self.record_failure(
+                        nat_rule.source_line,
+                        (
+                            f"DIP pool {nat_rule.dip_id} interface zone does not "
+                            f"match policy destination zone {destination_zone}"
+                        ),
+                        nat_rule.line_number,
+                    )
+                    continue
+
+            source_prefixes: list[str] = []
+            destination_prefixes: list[str] = []
+            applications: list[str] = []
+            unresolved = False
+            for reference in policy.source_addresses:
+                prefixes = self._resolve_address_prefixes(
+                    reference.name,
+                    source_zone,
+                )
+                if prefixes is None:
+                    unresolved = True
+                    break
+                source_prefixes.extend(
+                    prefix for prefix in prefixes if prefix not in source_prefixes
+                )
+            for reference in policy.destination_addresses:
+                prefixes = self._resolve_address_prefixes(
+                    reference.name,
+                    destination_zone,
+                )
+                if prefixes is None:
+                    unresolved = True
+                    break
+                destination_prefixes.extend(
+                    prefix for prefix in prefixes if prefix not in destination_prefixes
+                )
+            for reference in policy.services:
+                application = self._resolve_service(reference.name)
+                if application is None:
+                    unresolved = True
+                    break
+                if application not in applications:
+                    applications.append(application)
+            if unresolved:
+                self.record_failure(
+                    nat_rule.source_line,
+                    "NAT rule has an unresolved or non-IP policy match",
+                    nat_rule.line_number,
+                )
+                continue
+
+            context = (source_zone, destination_zone)
+            rule_set = sanity_check_naming(
+                f"screenos_{source_zone}_to_{destination_zone}"
+            )
+            if context not in emitted_source_rule_sets:
+                rule_set_prefix = f"set security nat source rule-set {rule_set}"
+                self.convert_config(f"{rule_set_prefix} from zone {source_zone}")
+                self.convert_config(f"{rule_set_prefix} to zone {destination_zone}")
+                emitted_source_rule_sets.add(context)
+
+            rule_name = sanity_check_naming(
+                f"policy_{policy.policy_name}_{policy.policy_id}"
+            )
+            prefix = f"set security nat source rule-set {rule_set} rule {rule_name}"
+            for source_prefix in source_prefixes:
+                self.convert_config(f"{prefix} match source-address {source_prefix}")
+            for destination_prefix in destination_prefixes:
+                self.convert_config(
+                    f"{prefix} match destination-address {destination_prefix}"
+                )
+            for application in applications:
+                self.convert_config(f"{prefix} match application {application}")
+            if nat_rule.kind == "pool":
+                self.convert_config(
+                    f"{prefix} then source-nat pool screenos_dip_{nat_rule.dip_id}"
+                )
+            else:
+                self.convert_config(f"{prefix} then source-nat interface")
+
+    def render_policies(
+        self,
+        ordered_policies: list[PolicyModel] | None = None,
+    ) -> None:
         seen_names: set[tuple[tuple[str, str, str], str]] = set()
         rendered_policy_keys: set[tuple[str, str]] = set()
-        for policy in self._ordered_policies():
+        for policy in ordered_policies or self._ordered_policies():
             policy_key = (policy.scope, policy.policy_id)
             rendered_policy_keys.add(policy_key)
             if policy_key in self.state.disabled_policy_keys or policy.disabled:

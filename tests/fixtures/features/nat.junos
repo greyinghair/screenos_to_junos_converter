@@ -1,0 +1,41 @@
+set applications application udp_161 protocol udp destination-port 161
+set applications application-set junos-dns application junos-dns-udp
+set applications application-set junos-dns application junos-dns-tcp
+set security zones security-zone Trust address-book address clients 192.0.2.0/24
+set security zones security-zone Untrust address-book address public 198.51.100.0/24
+set interfaces ge-0/0/0 unit 0 family inet address 203.0.113.1/24
+set security zones security-zone Untrust interfaces ge-0/0/0.0
+set interfaces ge-0/0/1 unit 0 family inet address 192.0.2.1/24
+set security zones security-zone Trust interfaces ge-0/0/1.0
+set security address-book global address mip_203_0_113_10 192.0.2.10/32
+set security nat static rule-set screenos_mip_ge_0_0_0_0 from interface ge-0/0/0.0
+set security nat static rule-set screenos_mip_ge_0_0_0_0 rule mip_203_0_113_10 match destination-address 203.0.113.10/32
+set security nat static rule-set screenos_mip_ge_0_0_0_0 rule mip_203_0_113_10 then static-nat prefix 192.0.2.10/32
+set security nat proxy-arp interface ge-0/0/0.0 address 203.0.113.10/32
+set security nat source pool screenos_dip_5 address 203.0.113.100/32 to 203.0.113.110/32
+set security nat proxy-arp interface ge-0/0/0.0 address 203.0.113.100/32 to 203.0.113.110/32
+set security nat source pool screenos_dip_6 address 203.0.113.120/32 to 203.0.113.125/32
+set security nat source pool screenos_dip_6 port no-translation
+set security nat proxy-arp interface ge-0/0/0.0 address 203.0.113.120/32 to 203.0.113.125/32
+set security nat source rule-set screenos_trust_to_untrust from zone Trust
+set security nat source rule-set screenos_trust_to_untrust to zone Untrust
+set security nat source rule-set screenos_trust_to_untrust rule policy_dip_traffic_10 match source-address 192.0.2.0/24
+set security nat source rule-set screenos_trust_to_untrust rule policy_dip_traffic_10 match destination-address 198.51.100.0/24
+set security nat source rule-set screenos_trust_to_untrust rule policy_dip_traffic_10 match application any
+set security nat source rule-set screenos_trust_to_untrust rule policy_dip_traffic_10 then source-nat pool screenos_dip_5
+set security nat source rule-set screenos_trust_to_untrust rule policy_interface_traffic_20 match source-address 192.0.2.0/24
+set security nat source rule-set screenos_trust_to_untrust rule policy_interface_traffic_20 match destination-address 0.0.0.0/0
+set security nat source rule-set screenos_trust_to_untrust rule policy_interface_traffic_20 match application junos-https
+set security nat source rule-set screenos_trust_to_untrust rule policy_interface_traffic_20 then source-nat interface
+set security policies from-zone Untrust to-zone Trust policy mip_web match source-address any
+set security policies from-zone Untrust to-zone Trust policy mip_web match destination-address mip_203_0_113_10
+set security policies from-zone Untrust to-zone Trust policy mip_web match application junos-http
+set security policies from-zone Untrust to-zone Trust policy mip_web then permit
+set security policies from-zone Trust to-zone Untrust policy dip_traffic match source-address clients
+set security policies from-zone Trust to-zone Untrust policy dip_traffic match destination-address public
+set security policies from-zone Trust to-zone Untrust policy dip_traffic match application any
+set security policies from-zone Trust to-zone Untrust policy dip_traffic then permit
+set security policies from-zone Trust to-zone Untrust policy interface_traffic match source-address clients
+set security policies from-zone Trust to-zone Untrust policy interface_traffic match destination-address any
+set security policies from-zone Trust to-zone Untrust policy interface_traffic match application junos-https
+set security policies from-zone Trust to-zone Untrust policy interface_traffic then permit

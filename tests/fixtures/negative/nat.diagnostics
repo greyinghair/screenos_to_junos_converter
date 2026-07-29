@@ -1,0 +1,8 @@
+7|interface NAT mode has no explicit destination context; use policy NAT-src for a lossless conversion
+8|DIP pool id must be between 4 and 1023
+9|unsupported DIP variant: incoming
+10|invalid MIP address or netmask
+11|undefined or unusable DIP pool id 99
+12|global policy NAT-src has no explicit Junos source/destination zone context
+14|disabled zone policy 3 omitted from output
+15|policy NAT-dst is unsupported; use MIP static NAT or migrate the destination mapping manually

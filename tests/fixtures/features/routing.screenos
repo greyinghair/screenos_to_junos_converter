@@ -1,0 +1,26 @@
+set interface ethernet0/0 zone Untrust
+set interface ethernet0/0 ip 203.0.113.2/24
+set interface tunnel.7 zone VPN
+set interface tunnel.7 ip 192.0.2.1/30
+set interface tunnel.8 zone Customer
+set interface tunnel.8 ip 192.0.2.5/30
+set vrouter trust-vr route 0.0.0.0/0 interface ethernet0/0 gateway 203.0.113.1 preference 10
+set vrouter trust-vr route 198.51.100.0/24 interface tunnel.7 metric 5 tag 200
+set vrouter customer-vr route 192.0.2.128/25 interface tunnel.8 gateway 192.0.2.6
+set vrouter trust-vr protocol bgp 64500
+set vrouter trust-vr protocol bgp router-id 192.0.2.1
+set vrouter trust-vr protocol bgp enable
+set vrouter trust-vr protocol bgp neighbor peer-group "Transit Peers" remote-as 64501
+set vrouter trust-vr protocol bgp neighbor peer-group "Transit Peers" hold-time 90
+set vrouter trust-vr protocol bgp neighbor peer-group "Transit Peers" keepalive 30
+set vrouter trust-vr protocol bgp neighbor peer-group "Transit Peers" route-map "Inbound Filter" in
+set vrouter trust-vr protocol bgp neighbor peer-group "Transit Peers" route-map "Outbound Filter" out
+set vrouter trust-vr protocol bgp neighbor peer-group "Transit Peers" md5-authentication "test-key"
+set vrouter trust-vr protocol bgp neighbor peer-group "Transit Peers" src-interface ethernet0/0
+set vrouter trust-vr protocol bgp neighbor 198.51.100.1 peer-group "Transit Peers"
+set vrouter trust-vr protocol bgp neighbor 198.51.100.1 enable
+set vrouter trust-vr protocol bgp neighbor 198.51.100.2 peer-group "Transit Peers"
+set vrouter trust-vr protocol bgp neighbor 198.51.100.2 enable
+set vrouter trust-vr protocol bgp neighbor peer-group "IPv6 Transit" remote-as 64502
+set vrouter trust-vr protocol bgp ipv6 neighbor 2001:db8::2 peer-group "IPv6 Transit"
+set vrouter trust-vr protocol bgp ipv6 neighbor 2001:db8::2 enable

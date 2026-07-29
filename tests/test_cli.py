@@ -62,7 +62,7 @@ def test_main_converts_and_reports_diagnostics(
 
     assert result == 0
     assert output.is_file()
-    assert "number of lines converted: 27" in caplog.text
+    assert "number of lines converted: 44" in caplog.text
     assert "number of lines NOT converted: 1" in caplog.text
     assert (
         "line 19 not converted: disabled zone policy 200 omitted from output"

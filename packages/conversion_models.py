@@ -10,6 +10,8 @@ InterfaceKind = Literal["ethernet", "management", "tunnel", "vlan"]
 PolicyScope = Literal["zone", "global"]
 PolicyPlacement = Literal["append", "top", "before"]
 PolicyMatchKind = Literal["source-address", "destination-address", "application"]
+BgpAddressFamily = Literal["inet", "inet6"]
+SourceNatKind = Literal["pool", "interface"]
 
 _ETHERNET_INTERFACE = re.compile(
     r"^ethernet(?P<slot>\d+)/(?P<port>\d+)(?:\.(?P<unit>\d+))?$",
@@ -129,3 +131,109 @@ class PolicyModel:
             self.source_zone or "",
             self.destination_zone or "",
         )
+
+
+@dataclass(frozen=True, slots=True)
+class StaticRouteModel:
+    """One destination-based ScreenOS static route."""
+
+    vrouter: str
+    destination: str
+    line_number: int
+    source_line: str
+    interface: str | None = None
+    gateway: str | None = None
+    preference: int | None = None
+    metric: int | None = None
+    tag: int | None = None
+    description: str | None = None
+    permanent: bool = False
+
+
+@dataclass(slots=True)
+class BgpOptions:
+    """Settings shared by ScreenOS BGP peer groups and individual peers."""
+
+    remote_as: int | None = None
+    hold_time: int | None = None
+    keepalive: int | None = None
+    authentication_key: str | None = None
+    import_policy: str | None = None
+    export_policy: str | None = None
+    source_interface: str | None = None
+    local_address: str | None = None
+    option_sources: dict[str, tuple[int, str]] = field(default_factory=dict)
+
+
+@dataclass(slots=True)
+class BgpPeerGroupModel:
+    """A named ScreenOS BGP peer group."""
+
+    name: str
+    line_number: int
+    source_line: str
+    options: BgpOptions = field(default_factory=BgpOptions)
+
+
+@dataclass(slots=True)
+class BgpPeerModel:
+    """One ScreenOS BGP neighbor."""
+
+    address: str
+    family: BgpAddressFamily
+    line_number: int
+    source_line: str
+    peer_group: str | None = None
+    enabled: bool = False
+    options: BgpOptions = field(default_factory=BgpOptions)
+
+
+@dataclass(slots=True)
+class BgpInstanceModel:
+    """BGP configuration collected for one ScreenOS virtual router."""
+
+    vrouter: str
+    line_number: int
+    source_line: str
+    local_as: int | None = None
+    router_id: str | None = None
+    enabled: bool = False
+    peer_groups: dict[str, BgpPeerGroupModel] = field(default_factory=dict)
+    peers: dict[str, BgpPeerModel] = field(default_factory=dict)
+
+
+@dataclass(frozen=True, slots=True)
+class MipModel:
+    """A ScreenOS mapped-IP definition normalized as a static NAT mapping."""
+
+    interface: str
+    mapped_prefix: str
+    host_prefix: str
+    vrouter: str
+    line_number: int
+    source_line: str
+
+
+@dataclass(frozen=True, slots=True)
+class DipPoolModel:
+    """A ScreenOS dynamic-IP pool normalized for Junos source NAT."""
+
+    interface: str
+    pool_id: int
+    start_address: str
+    end_address: str
+    fixed_port: bool
+    line_number: int
+    source_line: str
+
+
+@dataclass(frozen=True, slots=True)
+class SourceNatRuleModel:
+    """NAT-src semantics attached to a normalized firewall policy."""
+
+    policy_scope: PolicyScope
+    policy_id: str
+    kind: SourceNatKind
+    dip_id: int | None
+    line_number: int
+    source_line: str
