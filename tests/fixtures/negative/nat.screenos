@@ -1,0 +1,15 @@
+set interface ethernet0/0 zone Untrust
+set interface ethernet0/0 ip 203.0.113.1/24
+set interface ethernet0/1 zone Trust
+set interface ethernet0/1 ip 192.0.2.1/24
+set address "Trust" "CLIENTS" 192.0.2.0 255.255.255.0
+set address "Untrust" "PUBLIC" 198.51.100.0 255.255.255.0
+set interface ethernet0/0 nat
+set interface ethernet0/0 dip 3 203.0.113.100
+set interface ethernet0/0 dip 5 203.0.113.100 incoming
+set interface ethernet0/0 mip 203.0.113.10 host 192.0.2.10 netmask invalid
+set policy id 1 from "Trust" to "Untrust" "CLIENTS" "PUBLIC" "ANY" nat src dip-id 99 permit
+set policy global id 2 "Any" "Any" "HTTP" nat src permit
+set policy id 3 from "Trust" to "Untrust" "CLIENTS" "PUBLIC" "ANY" nat src permit
+set policy id 3 disable
+set policy id 4 from "Untrust" to "Trust" "Any" "Any" "HTTP" nat dst ip 192.0.2.10 permit

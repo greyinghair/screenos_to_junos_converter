@@ -18,6 +18,19 @@ set security zones security-zone Untrust address-book address-set destinations a
 set security zones security-zone Untrust address-book address-set destinations address portal
 set interfaces ge-0/0/0 unit 0 family inet
 set security zones security-zone Trust interfaces ge-0/0/0.0
+set interfaces ge-0/0/1 unit 0 family inet address 203.0.113.2/24
+set security zones security-zone Untrust interfaces ge-0/0/1.0
+set routing-options static route 0.0.0.0/0 next-hop 203.0.113.1
+set routing-options static route 0.0.0.0/0 preference 10
+set security nat source pool screenos_dip_5 address 203.0.113.100/32
+set security nat proxy-arp interface ge-0/0/1.0 address 203.0.113.100/32
+set security nat source rule-set screenos_trust_to_untrust from zone Trust
+set security nat source rule-set screenos_trust_to_untrust to zone Untrust
+set security nat source rule-set screenos_trust_to_untrust rule policy_300_300 match source-address 192.0.2.10/32
+set security nat source rule-set screenos_trust_to_untrust rule policy_300_300 match source-address 192.0.2.11/32
+set security nat source rule-set screenos_trust_to_untrust rule policy_300_300 match destination-address 198.51.100.20/32
+set security nat source rule-set screenos_trust_to_untrust rule policy_300_300 match application application_bundle
+set security nat source rule-set screenos_trust_to_untrust rule policy_300_300 then source-nat pool screenos_dip_5
 set security policies from-zone Trust to-zone Untrust policy 100 match source-address sources
 set security policies from-zone Trust to-zone Untrust policy 100 match destination-address destinations
 set security policies from-zone Trust to-zone Untrust policy 100 match application application_bundle
@@ -25,3 +38,7 @@ set security policies from-zone Trust to-zone Untrust policy 100 then permit
 set security policies from-zone Trust to-zone Untrust policy 100 match source-address src2
 set security policies from-zone Trust to-zone Untrust policy 100 match destination-address portal
 set security policies from-zone Trust to-zone Untrust policy 100 match application dual_dns_group
+set security policies from-zone Trust to-zone Untrust policy 300 match source-address sources
+set security policies from-zone Trust to-zone Untrust policy 300 match destination-address dst
+set security policies from-zone Trust to-zone Untrust policy 300 match application application_bundle
+set security policies from-zone Trust to-zone Untrust policy 300 then permit

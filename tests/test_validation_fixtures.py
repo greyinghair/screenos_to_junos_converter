@@ -20,7 +20,15 @@ def run_fixture(path: Path) -> Converter:
 
 @pytest.mark.parametrize(
     "feature",
-    ["services", "addresses", "policies", "global_policies", "interfaces"],
+    [
+        "services",
+        "addresses",
+        "policies",
+        "global_policies",
+        "interfaces",
+        "routing",
+        "nat",
+    ],
 )
 def test_supported_feature_fixtures_are_exact_and_deterministic(feature: str) -> None:
     input_path = FIXTURE_ROOT / "features" / f"{feature}.screenos"
@@ -50,6 +58,8 @@ def test_supported_feature_fixtures_are_exact_and_deterministic(feature: str) ->
         ("references", 3),
         ("interfaces", 3),
         ("policies", 5),
+        ("routing", 7),
+        ("nat", 17),
     ],
 )
 def test_unsupported_feature_fixtures_report_line_specific_diagnostics(
@@ -92,7 +102,7 @@ def test_full_conversion_fixture_validates_output_counts_and_diagnostics() -> No
     converter = run_fixture(input_path)
 
     assert converter.state.converted_config == expected
-    assert converter.state.succeeded == len(expected) == 27
+    assert converter.state.succeeded == len(expected) == 44
     assert converter.state.failed == 1
     assert [
         (diagnostic.line_number, diagnostic.reason)
@@ -117,6 +127,8 @@ def test_fixture_ipv4_values_use_documentation_networks() -> None:
             try:
                 value = ipaddress.ip_address(raw_value)
             except ValueError:
+                continue
+            if value == ipaddress.ip_address("0.0.0.0"):
                 continue
             assert any(value in network for network in documentation_networks), (
                 f"{fixture} contains non-documentation IPv4 value {value}"

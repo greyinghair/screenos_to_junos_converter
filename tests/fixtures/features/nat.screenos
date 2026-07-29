@@ -1,0 +1,12 @@
+set interface ethernet0/0 zone Untrust
+set interface ethernet0/0 ip 203.0.113.1/24
+set interface ethernet0/1 zone Trust
+set interface ethernet0/1 ip 192.0.2.1/24
+set interface ethernet0/0 mip 203.0.113.10 host 192.0.2.10 netmask 255.255.255.255 vrouter trust-vr
+set interface ethernet0/0 dip 5 203.0.113.100 203.0.113.110
+set interface ethernet0/0 dip 6 203.0.113.120 203.0.113.125 fix-port
+set address "Trust" "CLIENTS" 192.0.2.0 255.255.255.0
+set address "Untrust" "PUBLIC" 198.51.100.0 255.255.255.0
+set policy id 5 name "MIP Web" from "Untrust" to "Trust" "Any" "MIP(203.0.113.10)" "HTTP" permit
+set policy id 10 name "DIP Traffic" from "Trust" to "Untrust" "CLIENTS" "PUBLIC" "ANY" nat src dip-id 5 permit
+set policy id 20 name "Interface Traffic" from "Trust" to "Untrust" "CLIENTS" "Any" "HTTPS" nat src permit
