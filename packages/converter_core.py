@@ -135,6 +135,10 @@ RE_GROUP_ADDRESS: Final[re.Pattern[str]] = re.compile(
 RE_POLICY: Final[re.Pattern[str]] = re.compile(r"^set policy(?:\s|$)")
 RE_INTERFACE: Final[re.Pattern[str]] = re.compile(r"^set interface(?:\s|$)")
 RE_VROUTER: Final[re.Pattern[str]] = re.compile(r"^set vrouter(?:\s|$)")
+RE_BGP_AUTHENTICATION: Final[re.Pattern[str]] = re.compile(
+    r"(\bmd5-authentication)(?:\s+.*)?$",
+    re.IGNORECASE,
+)
 RE_ADDRESS: Final[re.Pattern[str]] = re.compile(
     r'^set address\s+"(?P<zone>[^"]+)"\s+"(?P<name>[^"]+)"\s+'
     r"(?P<value>\S+)(?:\s+(?P<mask>\d{1,3}(?:\.\d{1,3}){3}))?"
@@ -1026,17 +1030,25 @@ class Converter:
         return sanity_check_naming(vrouter)
 
     def parse_vrouter_line(self, line: str, line_number: int) -> None:
+        diagnostic_line = RE_BGP_AUTHENTICATION.sub(
+            lambda match: f"{match.group(1)} <redacted>",
+            line,
+        )
         try:
             tokens = shlex.split(line)
         except ValueError:
             self.record_failure(
-                line, "malformed virtual-router definition", line_number
+                diagnostic_line,
+                "malformed virtual-router definition",
+                line_number,
             )
             return
 
         if len(tokens) < 5 or tokens[:2] != ["set", "vrouter"]:
             self.record_failure(
-                line, "malformed virtual-router definition", line_number
+                diagnostic_line,
+                "malformed virtual-router definition",
+                line_number,
             )
             return
 
@@ -1047,15 +1059,20 @@ class Converter:
         elif command == "protocol" and len(tokens) >= 6:
             if tokens[4].lower() != "bgp":
                 self.record_failure(
-                    line,
+                    diagnostic_line,
                     f"unsupported routing protocol: {tokens[4]}",
                     line_number,
                 )
                 return
-            self.parse_bgp_line(vrouter, tokens[5:], line, line_number)
+            self.parse_bgp_line(
+                vrouter,
+                tokens[5:],
+                diagnostic_line,
+                line_number,
+            )
         else:
             self.record_failure(
-                line,
+                diagnostic_line,
                 f"unsupported virtual-router command: {' '.join(tokens[3:])}",
                 line_number,
             )
@@ -1214,6 +1231,10 @@ class Converter:
         line: str,
         line_number: int,
     ) -> None:
+        line = RE_BGP_AUTHENTICATION.sub(
+            lambda match: f"{match.group(1)} <redacted>",
+            line,
+        )
         if not tokens:
             self.record_failure(line, "malformed BGP definition", line_number)
             return
@@ -1364,9 +1385,15 @@ class Converter:
                 options.option_sources[option] = (line_number, line)
                 index += 2
             elif option == "md5-authentication" and index + 1 < len(tokens):
-                options.authentication_key = tokens[index + 1]
-                options.option_sources["md5-authentication"] = (line_number, line)
-                index += 2
+                self.record_failure(
+                    line,
+                    (
+                        "BGP MD5 authentication secret omitted; configure a Junos "
+                        "authentication key manually"
+                    ),
+                    line_number,
+                )
+                return False
             elif option == "route-map" and index + 2 < len(tokens):
                 direction = tokens[index + 2].lower()
                 if direction not in ("in", "out"):
@@ -1640,9 +1667,6 @@ class Converter:
                 ),
                 line_number,
             )
-        if options.authentication_key is not None:
-            key = options.authentication_key.replace("\\", "\\\\").replace('"', '\\"')
-            self.convert_config(f'{prefix} authentication-key "{key}"')
         if options.import_policy is not None:
             self.convert_config(f"{prefix} import {options.import_policy}")
         if options.export_policy is not None:

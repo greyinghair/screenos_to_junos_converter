@@ -22,7 +22,6 @@ set protocols bgp group transit_peers peer-as 64501
 set protocols bgp group transit_peers family inet unicast
 set protocols bgp group transit_peers local-address 203.0.113.2
 set protocols bgp group transit_peers hold-time 90
-set protocols bgp group transit_peers authentication-key "test-key"
 set protocols bgp group transit_peers import inbound_filter
 set protocols bgp group transit_peers export outbound_filter
 set protocols bgp group transit_peers neighbor 198.51.100.1
