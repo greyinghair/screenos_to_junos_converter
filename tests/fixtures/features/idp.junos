@@ -1,0 +1,47 @@
+set applications application udp_161 protocol udp destination-port 161
+set applications application-set junos-dns application junos-dns-udp
+set applications application-set junos-dns application junos-dns-tcp
+set applications application tcp_8080 protocol tcp destination-port 8080
+set security zones security-zone Untrust address-book address clients 198.51.100.0/24
+set security zones security-zone Trust address-book address web_server 192.0.2.10
+set security idp dynamic-attack-group screenos_critical_http_sigs filters severity values critical
+set security idp dynamic-attack-group screenos_critical_http_sigs filters service values HTTP
+set security idp dynamic-attack-group screenos_critical_http_sigs filters type values signature
+set security idp idp-policy screenos_untrust_trust_inspect_web_idp rulebase-ips rule rule_001 match from-zone Untrust
+set security idp idp-policy screenos_untrust_trust_inspect_web_idp rulebase-ips rule rule_001 match to-zone Trust
+set security idp idp-policy screenos_untrust_trust_inspect_web_idp rulebase-ips rule rule_001 match source-address any
+set security idp idp-policy screenos_untrust_trust_inspect_web_idp rulebase-ips rule rule_001 match destination-address any
+set security idp idp-policy screenos_untrust_trust_inspect_web_idp rulebase-ips rule rule_001 match application default
+set security idp idp-policy screenos_untrust_trust_inspect_web_idp rulebase-ips rule rule_001 match attacks dynamic-attack-groups screenos_critical_http_sigs
+set security idp idp-policy screenos_untrust_trust_inspect_web_idp rulebase-ips rule rule_001 then action close-server
+set security idp idp-policy screenos_untrust_trust_inspect_web_idp rulebase-ips rule rule_001 then notification log-attacks
+set security idp idp-policy screenos_untrust_trust_inspect_web_idp rulebase-ips rule rule_001 then severity critical
+set security idp dynamic-attack-group screenos_high_http_anom filters severity values major
+set security idp dynamic-attack-group screenos_high_http_anom filters service values HTTP
+set security idp dynamic-attack-group screenos_high_http_anom filters type values anomaly
+set security idp idp-policy screenos_untrust_trust_inspect_web_idp rulebase-ips rule rule_002 match from-zone Untrust
+set security idp idp-policy screenos_untrust_trust_inspect_web_idp rulebase-ips rule rule_002 match to-zone Trust
+set security idp idp-policy screenos_untrust_trust_inspect_web_idp rulebase-ips rule rule_002 match source-address any
+set security idp idp-policy screenos_untrust_trust_inspect_web_idp rulebase-ips rule rule_002 match destination-address any
+set security idp idp-policy screenos_untrust_trust_inspect_web_idp rulebase-ips rule rule_002 match application default
+set security idp idp-policy screenos_untrust_trust_inspect_web_idp rulebase-ips rule rule_002 match attacks dynamic-attack-groups screenos_high_http_anom
+set security idp idp-policy screenos_untrust_trust_inspect_web_idp rulebase-ips rule rule_002 then action drop-connection
+set security idp idp-policy screenos_untrust_trust_inspect_web_idp rulebase-ips rule rule_002 then notification log-attacks
+set security idp idp-policy screenos_untrust_trust_inspect_web_idp rulebase-ips rule rule_002 then severity major
+set security idp dynamic-attack-group screenos_low_http_sigs filters severity values warning
+set security idp dynamic-attack-group screenos_low_http_sigs filters service values HTTP
+set security idp dynamic-attack-group screenos_low_http_sigs filters type values signature
+set security idp idp-policy screenos_untrust_trust_inspect_web_idp rulebase-ips rule rule_003 match from-zone Untrust
+set security idp idp-policy screenos_untrust_trust_inspect_web_idp rulebase-ips rule rule_003 match to-zone Trust
+set security idp idp-policy screenos_untrust_trust_inspect_web_idp rulebase-ips rule rule_003 match source-address any
+set security idp idp-policy screenos_untrust_trust_inspect_web_idp rulebase-ips rule rule_003 match destination-address any
+set security idp idp-policy screenos_untrust_trust_inspect_web_idp rulebase-ips rule rule_003 match application default
+set security idp idp-policy screenos_untrust_trust_inspect_web_idp rulebase-ips rule rule_003 match attacks dynamic-attack-groups screenos_low_http_sigs
+set security idp idp-policy screenos_untrust_trust_inspect_web_idp rulebase-ips rule rule_003 then action close-client
+set security idp idp-policy screenos_untrust_trust_inspect_web_idp rulebase-ips rule rule_003 then notification log-attacks
+set security idp idp-policy screenos_untrust_trust_inspect_web_idp rulebase-ips rule rule_003 then severity warning
+set security policies from-zone Untrust to-zone Trust policy inspect_web match source-address clients
+set security policies from-zone Untrust to-zone Trust policy inspect_web match destination-address web_server
+set security policies from-zone Untrust to-zone Trust policy inspect_web match application tcp_8080
+set security policies from-zone Untrust to-zone Trust policy inspect_web then permit
+set security policies from-zone Untrust to-zone Trust policy inspect_web then permit application-services idp-policy screenos_untrust_trust_inspect_web_idp

@@ -68,3 +68,31 @@ def test_main_converts_and_reports_diagnostics(
         "line 19 not converted: disabled zone policy 200 omitted from output"
         in caplog.text
     )
+
+
+def test_main_reports_advanced_security_manual_review_warning(
+    monkeypatch,
+    caplog,
+    tmp_path: Path,
+) -> None:
+    fixture = Path(__file__).parent / "fixtures" / "features" / "idp.screenos"
+    output = tmp_path / "idp.junos"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "convert.py",
+            "--input",
+            str(fixture),
+            "--output",
+            str(output),
+            "--log-level",
+            "INFO",
+        ],
+    )
+
+    with caplog.at_level(logging.INFO):
+        result = main()
+
+    assert result == 0
+    assert "MANUAL REVIEW REQUIRED: IDP output requires" in caplog.text

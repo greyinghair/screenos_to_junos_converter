@@ -1,0 +1,18 @@
+set interface ethernet0/0 zone "Untrust"
+set interface ethernet0/0 ip 203.0.113.2/24
+set interface tunnel.10 zone "VPN"
+set interface tunnel.10 ip 192.0.2.1/30
+set ike p1-proposal "phase1_secure" preshare group14 esp aes256 sha2-256 second 28800
+set ike p2-proposal "phase2_secure" group14 esp aes256 sha2-256 second 3600
+set ike gateway "branch_gateway" address 198.51.100.1 Main outgoing-interface "ethernet0/0" preshare "fixture-only-secret" proposal "phase1_secure" nat-traversal
+set vpn "route_vpn" gateway "branch_gateway" replay tunnel idletime 0 proposal "phase2_secure"
+set vpn "route_vpn" bind interface tunnel.10
+set vpn "route_vpn" proxy-id local-ip 192.0.2.0/24 remote-ip 198.51.100.0/24 "ANY"
+set vrouter trust-vr route 198.51.100.0/24 interface tunnel.10
+set address "Trust" "LOCAL_NET" 192.0.2.0 255.255.255.0
+set address "VPN" "REMOTE_NET" 198.51.100.0 255.255.255.0
+set policy id 10 name "route_out" from "Trust" to "VPN" "LOCAL_NET" "REMOTE_NET" "ANY" permit
+set vpn "policy_vpn" gateway "branch_gateway" no-replay tunnel idletime 0 proposal "phase2_secure"
+set address "Untrust" "POLICY_REMOTE" 198.51.100.128 255.255.255.128
+set policy id 20 name "policy_out" from "Trust" to "Untrust" "LOCAL_NET" "POLICY_REMOTE" "ANY" tunnel vpn "policy_vpn" id 20 pair-policy 21
+set policy id 21 name "policy_in" from "Untrust" to "Trust" "POLICY_REMOTE" "LOCAL_NET" "ANY" tunnel vpn "policy_vpn" id 21 pair-policy 20

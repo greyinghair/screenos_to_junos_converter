@@ -24,6 +24,12 @@ and the limitations that must be resolved before expanding coverage.
   [NAT processing and rule ordering](https://www.juniper.net/documentation/us/en/software/junos/nat/topics/topic-map/security-nat-overview.html),
   [source NAT](https://www.juniper.net/documentation/us/en/software/junos/nat/topics/topic-map/nat-security-source-and-source-pool.html),
   and [static NAT](https://www.juniper.net/documentation/us/en/software/junos/nat/topics/topic-map/security-nat-static.html).
+- Phase 3 target hierarchies are cross-checked against Juniper documentation
+  for [IKE/IPsec VPN configuration](https://www.juniper.net/documentation/us/en/software/junos/vpn-ipsec/topics/topic-map/security-ipsec-vpn-configuration-overview.html),
+  [route-based VPNs](https://www.juniper.net/documentation/us/en/software/junos/vpn-ipsec/topics/topic-map/security-route-based-ipsec-vpns.html),
+  [policy-based VPNs](https://www.juniper.net/documentation/us/en/software/junos/vpn-ipsec/topics/topic-map/security-policy-based-ipsecvpns.html),
+  [IDP rulebases](https://www.juniper.net/documentation/us/en/software/junos/idp-policy/topics/topic-map/security-idp-policy-rules-and-rulebases.html),
+  and [per-security-policy IDP attachment](https://www.juniper.net/documentation/us/en/software/junos/idp-policy/topics/topic-map/security-idp-policies-overview.html).
 
 Do not add a command form until its ScreenOS source syntax, Junos equivalent,
 fixture, and unsupported-path behaviour are recorded here. This avoids silently
@@ -62,17 +68,27 @@ turning an assumption into a migration guarantee.
 | `set interface IF mip MAPPED host HOST [vrouter VR] [netmask MASK]` | Global host address plus `security nat static rule-set` from the converted interface; same-subnet mappings also emit `security nat proxy-arp` | **Supported for aligned IPv4 one-to-one or equal-prefix mappings.** Generated MIP names resolve in converted policies, and custom host routing instances are declared. Static NAT is rendered before source NAT to preserve Junos processing precedence. | NAT fixture and normalized-model tests |
 | `set interface IF dip ID START [END] [fix-port]` | `security nat source pool screenos_dip_ID`; same-subnet pools also emit proxy ARP | **Supported for IPv4 pool IDs 4–1023.** `fix-port` maps to `port no-translation`. Extended-IP, incoming, random-port, and shifted DIP variants are diagnosed instead of partially converted. | NAT and negative-NAT fixtures |
 | `set policy id NUMBER ... nat src [dip-id ID] permit` | Zone-pair `security nat source rule-set` ordered by the normalized policy pipeline; action uses a DIP pool or `source-nat interface` | **Supported.** Address objects and sets must resolve completely to IP prefixes, services must resolve to Junos applications, DIP interfaces must belong to the policy destination zone, and disabled policies omit both policy and NAT output. Global NAT-src and policy NAT-dst are diagnosed because their required context or semantics are not represented by this subset. | NAT, negative-NAT, and end-to-end fixtures |
+| `set ike p1-proposal NAME preshare GROUP esp ENCRYPTION AUTH second SECONDS` | `security ike proposal` | **Supported subset.** Preshared-key authentication, DH groups 1/2/5/14/15/16/19/20/21, AES-128/192/256 or 3DES, SHA-1/SHA-256/SHA-384 (including ScreenOS `sha2-384`), and 180–86400 second lifetimes are modeled. DES and MD5 are rejected. Group 1/2/5, 3DES, and SHA-1 are preserved with deprecation diagnostics. SHA-384 IPsec support is platform/release dependent and requires validation. | IPsec fixture and normalized-model tests |
+| `set ike gateway NAME (address PEER\|dynamic ID) (main\|aggressive) [local-id ID] outgoing-interface IF preshare SECRET proposal P1 [nat-traversal]` | Generated `security ike policy` and `security ike gateway` | **Supported subset.** Static IP/DNS peers and strictly validated dynamic IP/hostname/user-at-hostname IDs are supported. The outgoing interface must resolve to an emitted logical interface. NAT traversal is recorded and relies on the Junos SRX default-enabled behavior. Preshared secrets are never persisted or emitted, including quoted and escaped forms; the source line is redacted and a manual-key diagnostic is produced. Security-level bundles and other authentication methods are unsupported. | IPsec fixture, adversarial redaction tests, and negative crypto/identity tests |
+| `set ike p2-proposal NAME (GROUP\|no-pfs) esp ENCRYPTION AUTH second SECONDS` | `security ipsec proposal` plus generated `security ipsec policy` | **Supported subset.** The algorithm and lifetime limits match the Phase 1 row. A DH group maps to `perfect-forward-secrecy`; `no-pfs` omits PFS. | IPsec fixture and normalized-model tests |
+| `set vpn NAME gateway GATEWAY (replay\|no-replay) tunnel [idletime 0] proposal P2`, followed by optional `bind interface TUNNEL` and `proxy-id local-ip PREFIX remote-ip PREFIX ANY` | `security ipsec vpn` with gateway/policy references, optional `ike no-anti-replay`, optional `bind-interface st0.N`, and optional `ike proxy-identity` | **Supported.** A tunnel binding creates a route-based VPN and must resolve to a rendered `tunnel.N`; routing continues through the shared routing model. An unbound VPN can be used by a policy-based tunnel action. Explicit proxy IDs require same-family prefixes and service `ANY`. `replay` preserves the Junos anti-replay default; `no-replay` emits `no-anti-replay`. Nonzero idle time and service-specific proxy IDs are diagnosed. | Exact IPsec fixture covers route- and policy-based VPNs plus routing, replay behavior, and proxy IDs |
+| `set policy id NUMBER ... tunnel vpn NAME [id ID] [pair-policy NUMBER]` | `security policies ... then permit tunnel ipsec-vpn NAME [pair-policy POLICY]` | **Supported for IKEv1-style policy-based VPNs.** A pair target must be reciprocal and reference the same unbound VPN. Policy NAT-src and IDP cannot be combined with this action. Current Junos releases and the optional `junos-ike` package have platform/process-specific policy-based VPN limitations, so route-based migration is preferred. | Exact IPsec fixture and normalized-model tests |
+| `set policy id NUMBER ... permit attack "SEVERITY:SERVICE:(SIGS\|ANOM)" action (close\|close-client\|close-server\|drop)`, flattened `set policy id NUMBER attack ...`, or policy-context `set attack ...` | Generated `security idp dynamic-attack-group` objects, ordered per-firewall-policy `security idp idp-policy ... rulebase-ips`, a deterministic `security idp default-policy` when multiple policies require it, and `then permit application-services idp-policy` attachment | **Supported for Junos 18.2R1 and later.** ScreenOS Critical/High/Medium/Low/Info map to Junos critical/major/minor/warning/info. Service, severity, and signature/anomaly type become dynamic-group filters; actions map to their closest documented connection action and attack logging is enabled. Severity-only groups such as `CRITICAL:` are also supported. Arbitrary or individual ScreenOS signature names are diagnosed and never substituted; the affected firewall policy and its linked source NAT rule are omitted so inspection cannot silently degrade to plain permit. The multiple-policy default requires Junos 18.3R1 or later. A current signature package and platform/license review are required. | Exact IDP fixture, normalized-model tests, unknown-signature fail-closed test, multiple-policy default test, and CLI manual-review test |
 
 ## Explicitly unsupported work
 
-- IPsec VPN: #21
-- IDP rules: #26
 - Alternate XML output or input: #4
 - Source-based routing, BGP redistribution/network origination, route-map
   definitions, and BGP options outside the table above.
 - ScreenOS `set interface IF nat` mode without explicit policy destination
   context, policy NAT-dst/VIP, and extended, incoming, random-port, or shifted
   DIP variants.
+- IKEv2-specific ScreenOS gateway syntax, certificates/RSA/DSA/XAuth, multiple
+  proposals per gateway or VPN, VPN groups, L2TP, manual-key VPNs, VPN monitor,
+  nonzero VPN idle timers, and service-specific proxy IDs.
+- ScreenOS custom/individual attack signatures, attack IP-actions and timeouts,
+  per-attack logging suppression, exempt rulebases, application DDoS rules, and
+  IDP objects that do not match the documented severity/service/type group form.
 
 ## Contribution checklist
 

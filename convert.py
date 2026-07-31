@@ -76,6 +76,8 @@ def main() -> int:
             else "unknown line"
         )
         LOGGER.warning("%s not converted: %s", location, diagnostic.reason)
+    for warning in converter.state.manual_review_warnings:
+        LOGGER.warning("MANUAL REVIEW REQUIRED: %s", warning)
     LOGGER.info("number of lines converted: %s", converter.state.succeeded)
     LOGGER.info("number of lines NOT converted: %s", converter.state.failed)
     LOGGER.info("output file: %s", output_path)

@@ -1,0 +1,7 @@
+set service "HTTP-CUSTOM" protocol tcp src-port 0-65535 dst-port 8080-8080
+set address "Untrust" "CLIENTS" 198.51.100.0 255.255.255.0
+set address "Trust" "WEB_SERVER" 192.0.2.10 255.255.255.255
+set policy id 30 name "inspect_web" from "Untrust" to "Trust" "CLIENTS" "WEB_SERVER" "HTTP-CUSTOM" permit attack "CRITICAL:HTTP:SIGS" action close-server
+set policy id 30 attack "HIGH:HTTP:ANOM" action drop
+set policy id 30
+set attack "LOW:HTTP:SIGS" action close-client
