@@ -12,6 +12,14 @@ PolicyPlacement = Literal["append", "top", "before"]
 PolicyMatchKind = Literal["source-address", "destination-address", "application"]
 BgpAddressFamily = Literal["inet", "inet6"]
 SourceNatKind = Literal["pool", "interface"]
+IkeEndpointKind = Literal["address", "dynamic"]
+IkeExchangeMode = Literal["main", "aggressive"]
+IdpAction = Literal[
+    "close-client",
+    "close-client-and-server",
+    "close-server",
+    "drop-connection",
+]
 
 _ETHERNET_INTERFACE = re.compile(
     r"^ethernet(?P<slot>\d+)/(?P<port>\d+)(?:\.(?P<unit>\d+))?$",
@@ -121,6 +129,10 @@ class PolicyModel:
     log: bool = False
     count: bool = False
     disabled: bool = False
+    tunnel_vpn: str | None = None
+    pair_policy_id: str | None = None
+    idp_rules: list[IdpRuleModel] = field(default_factory=list)
+    idp_invalid: bool = False
 
     @property
     def context(self) -> tuple[str, str, str]:
@@ -234,5 +246,81 @@ class SourceNatRuleModel:
     policy_id: str
     kind: SourceNatKind
     dip_id: int | None
+    line_number: int
+    source_line: str
+
+
+@dataclass(frozen=True, slots=True)
+class IkeProposalModel:
+    """One ScreenOS Phase 1 proposal mapped to Junos IKE algorithms."""
+
+    name: str
+    authentication_method: str
+    dh_group: str
+    authentication_algorithm: str
+    encryption_algorithm: str
+    lifetime_seconds: int
+    line_number: int
+    source_line: str
+
+
+@dataclass(slots=True)
+class IkeGatewayModel:
+    """A ScreenOS IKE peer and the Phase 1 policy it references."""
+
+    name: str
+    endpoint_kind: IkeEndpointKind
+    endpoint: str
+    exchange_mode: IkeExchangeMode
+    outgoing_interface: str
+    proposal_name: str
+    line_number: int
+    source_line: str
+    local_id: str | None = None
+    preshared_key_omitted: bool = False
+    nat_traversal: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class IpsecProposalModel:
+    """One ScreenOS Phase 2 proposal mapped to Junos IPsec algorithms."""
+
+    name: str
+    protocol: Literal["esp"]
+    authentication_algorithm: str
+    encryption_algorithm: str
+    lifetime_seconds: int
+    pfs_group: str | None
+    line_number: int
+    source_line: str
+
+
+@dataclass(slots=True)
+class IpsecVpnModel:
+    """Linked ScreenOS VPN definition for route- or policy-based rendering."""
+
+    name: str
+    gateway_name: str
+    proposal_name: str
+    line_number: int
+    source_line: str
+    anti_replay: bool = True
+    bind_interface: str | None = None
+    proxy_local: str | None = None
+    proxy_remote: str | None = None
+    proxy_service: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class IdpRuleModel:
+    """A ScreenOS Deep Inspection attachment normalized for a Junos IDP rule."""
+
+    attack_group: str
+    dynamic_group_name: str
+    service: str
+    severity: str
+    attack_type: Literal["anomaly", "signature"]
+    action: IdpAction
+    log_attacks: bool
     line_number: int
     source_line: str

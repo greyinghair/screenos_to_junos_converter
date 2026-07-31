@@ -1,0 +1,50 @@
+set applications application udp_161 protocol udp destination-port 161
+set applications application-set junos-dns application junos-dns-udp
+set applications application-set junos-dns application junos-dns-tcp
+set security zones security-zone Trust address-book address local_net 192.0.2.0/24
+set security zones security-zone VPN address-book address remote_net 198.51.100.0/24
+set security zones security-zone Untrust address-book address policy_remote 198.51.100.128/25
+set interfaces ge-0/0/0 unit 0 family inet address 203.0.113.2/24
+set security zones security-zone Untrust interfaces ge-0/0/0.0
+set interfaces st0 unit 10 family inet address 192.0.2.1/30
+set security zones security-zone VPN interfaces st0.10
+set security ike proposal phase1_secure authentication-method pre-shared-keys
+set security ike proposal phase1_secure dh-group group14
+set security ike proposal phase1_secure authentication-algorithm sha-256
+set security ike proposal phase1_secure encryption-algorithm aes-256-cbc
+set security ike proposal phase1_secure lifetime-seconds 28800
+set security ike policy branch_gateway_ike_policy mode main
+set security ike policy branch_gateway_ike_policy proposals phase1_secure
+set security ike gateway branch_gateway ike-policy branch_gateway_ike_policy
+set security ike gateway branch_gateway address 198.51.100.1
+set security ike gateway branch_gateway external-interface ge-0/0/0.0
+set security ipsec proposal phase2_secure protocol esp
+set security ipsec proposal phase2_secure authentication-algorithm hmac-sha-256-128
+set security ipsec proposal phase2_secure encryption-algorithm aes-256-cbc
+set security ipsec proposal phase2_secure lifetime-seconds 3600
+set security ipsec policy route_vpn_ipsec_policy proposals phase2_secure
+set security ipsec policy route_vpn_ipsec_policy perfect-forward-secrecy keys group14
+set security ipsec vpn route_vpn ike gateway branch_gateway
+set security ipsec vpn route_vpn ike ipsec-policy route_vpn_ipsec_policy
+set security ipsec vpn route_vpn bind-interface st0.10
+set security ipsec vpn route_vpn ike proxy-identity local 192.0.2.0/24
+set security ipsec vpn route_vpn ike proxy-identity remote 198.51.100.0/24
+set security ipsec vpn route_vpn ike proxy-identity service any
+set security ipsec policy policy_vpn_ipsec_policy proposals phase2_secure
+set security ipsec policy policy_vpn_ipsec_policy perfect-forward-secrecy keys group14
+set security ipsec vpn policy_vpn ike gateway branch_gateway
+set security ipsec vpn policy_vpn ike ipsec-policy policy_vpn_ipsec_policy
+set security ipsec vpn policy_vpn ike no-anti-replay
+set routing-options static route 198.51.100.0/24 next-hop st0.10
+set security policies from-zone Trust to-zone VPN policy route_out match source-address local_net
+set security policies from-zone Trust to-zone VPN policy route_out match destination-address remote_net
+set security policies from-zone Trust to-zone VPN policy route_out match application any
+set security policies from-zone Trust to-zone VPN policy route_out then permit
+set security policies from-zone Trust to-zone Untrust policy policy_out match source-address local_net
+set security policies from-zone Trust to-zone Untrust policy policy_out match destination-address policy_remote
+set security policies from-zone Trust to-zone Untrust policy policy_out match application any
+set security policies from-zone Trust to-zone Untrust policy policy_out then permit tunnel ipsec-vpn policy_vpn pair-policy policy_in
+set security policies from-zone Untrust to-zone Trust policy policy_in match source-address policy_remote
+set security policies from-zone Untrust to-zone Trust policy policy_in match destination-address local_net
+set security policies from-zone Untrust to-zone Trust policy policy_in match application any
+set security policies from-zone Untrust to-zone Trust policy policy_in then permit tunnel ipsec-vpn policy_vpn pair-policy policy_out

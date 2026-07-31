@@ -5,7 +5,8 @@
 [![Python 3.14](https://img.shields.io/github/check-runs/greyinghair/screenos_to_junos_converter/main?nameFilter=Python%203.14&label=Python%203.14&logo=python)](https://github.com/greyinghair/screenos_to_junos_converter/actions/workflows/pr-validate.yml?query=branch%3Amain)
 
 This program converts a tested subset of Juniper ScreenOS services, addresses,
-interfaces, routing, NAT, and firewall policies into Junos SRX `set` commands.
+interfaces, routing, NAT, firewall policies, IPsec VPNs, and IDP attachments
+into Junos SRX `set` commands.
 It is a migration aid, not a complete device configuration translator.
 
 ## What It Converts
@@ -33,14 +34,19 @@ It is a migration aid, not a complete device configuration translator.
   services, and policy ordering.
 - Disabled policies are identified and intentionally omitted with a
   line-specific diagnostic, including their linked NAT rules.
+- Explicit IKE Phase 1 and IPsec Phase 2 proposals, static or dynamic IKE
+  gateways, route-based VPNs bound to converted `st0` interfaces, proxy IDs,
+  and paired policy-based VPN actions. Preshared secrets are redacted and must
+  be configured manually on the generated IKE policy.
+- ScreenOS Deep Inspection severity/service signature and anomaly groups to
+  Junos dynamic attack groups and ordered IDP rulebases, attached directly to
+  the converted permit policy on Junos 18.2R1 and later.
 
 The exact accepted ScreenOS grammar and Junos output hierarchy are maintained
 in the [conversion support matrix](docs/conversion-support-matrix.md).
 
 ## What It Does Not Convert
 
-- [IPsec VPNs](https://github.com/greyinghair/screenos_to_junos_converter/issues/21)
-- [IDP rules](https://github.com/greyinghair/screenos_to_junos_converter/issues/26)
 - [XML input or output](https://github.com/greyinghair/screenos_to_junos_converter/issues/4)
 - Source-based routes, BGP network origination/redistribution, and ScreenOS
   route-map definitions. BGP MD5 authentication secrets are redacted and
@@ -55,6 +61,15 @@ in the [conversion support matrix](docs/conversion-support-matrix.md).
 - IPv6, CIDR, wildcard, and address-range address-book input forms;
   non-TCP/UDP custom services; service source-port rendering; and policy
   schedules, alert logging, count alarms, or other unlisted policy options.
+- IKE security-level bundles, IKEv2-specific syntax, certificate authentication,
+  VPN groups/L2TP/manual-key VPNs, multiple proposals, service-specific proxy
+  IDs, and nonzero VPN idle timers. DES and MD5 are rejected; legacy DH, 3DES,
+  and SHA-1 selections are preserved only with deprecation diagnostics.
+- Arbitrary ScreenOS IDP signature names, custom attack definitions, IP-actions,
+  per-attack logging suppression, exempt rulebases, and application DDoS rules.
+  Unknown signatures are reported, never silently replaced with a Junos
+  signature, and cause the affected firewall policy to be omitted rather than
+  rendered as an uninspected permit.
 
 Unsupported or unrecognized lines are reported with line numbers and reasons.
 Always review the generated configuration before deployment.
@@ -157,6 +172,9 @@ python3 convert.py \
 - Unmatched or unsupported lines are counted in the "NOT converted" metric.
 - Each unconverted line produces a line-numbered diagnostic explaining why it
   was omitted.
+- IPsec and IDP conversion adds an explicit `MANUAL REVIEW REQUIRED` warning.
+  Validate peer IDs, keys, routing/NAT, algorithms, Junos version and platform,
+  signature package contents, and IDP licensing before deployment.
 
 ## Development
 

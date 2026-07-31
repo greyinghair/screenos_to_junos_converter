@@ -6,6 +6,7 @@ import ipaddress
 import logging
 import re
 import shlex
+from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Final
@@ -16,7 +17,12 @@ from .conversion_models import (
     BgpPeerGroupModel,
     BgpPeerModel,
     DipPoolModel,
+    IdpRuleModel,
+    IkeGatewayModel,
+    IkeProposalModel,
     InterfaceModel,
+    IpsecProposalModel,
+    IpsecVpnModel,
     MipModel,
     PolicyModel,
     PolicyReference,
@@ -135,6 +141,9 @@ RE_GROUP_ADDRESS: Final[re.Pattern[str]] = re.compile(
 RE_POLICY: Final[re.Pattern[str]] = re.compile(r"^set policy(?:\s|$)")
 RE_INTERFACE: Final[re.Pattern[str]] = re.compile(r"^set interface(?:\s|$)")
 RE_VROUTER: Final[re.Pattern[str]] = re.compile(r"^set vrouter(?:\s|$)")
+RE_IKE: Final[re.Pattern[str]] = re.compile(r"^set ike(?:\s|$)")
+RE_VPN: Final[re.Pattern[str]] = re.compile(r"^set vpn(?:\s|$)")
+RE_ATTACK: Final[re.Pattern[str]] = re.compile(r"^set attack(?:\s|$)")
 RE_BGP_AUTHENTICATION: Final[re.Pattern[str]] = re.compile(
     r"(\bmd5-authentication)(?:\s+.*)?$",
     re.IGNORECASE,
@@ -204,6 +213,14 @@ class ConversionState:
     mips: list[MipModel] = field(default_factory=list)
     dip_pools: dict[int, DipPoolModel] = field(default_factory=dict)
     source_nat_rules: list[SourceNatRuleModel] = field(default_factory=list)
+
+    ike_proposals: dict[str, IkeProposalModel] = field(default_factory=dict)
+    ike_gateways: dict[str, IkeGatewayModel] = field(default_factory=dict)
+    ipsec_proposals: dict[str, IpsecProposalModel] = field(default_factory=dict)
+    ipsec_vpns: dict[str, IpsecVpnModel] = field(default_factory=dict)
+    rendered_vpns: set[str] = field(default_factory=set)
+    rendered_idp_policies: set[tuple[str, str]] = field(default_factory=set)
+    manual_review_warnings: list[str] = field(default_factory=list)
 
     converted_config: list[str] = field(default_factory=list)
     diagnostics: list[ConversionDiagnostic] = field(default_factory=list)
@@ -276,6 +293,8 @@ class Converter:
                     self.multi_line_rule(line, "source-address", linecount)
                 elif RE_MULTI_SVC.search(line):
                     self.multi_line_rule(line, "application", linecount)
+                elif RE_ATTACK.search(line):
+                    self.parse_idp_continuation(line, linecount)
                 elif RE_POLICY.search(line):
                     self.parse_policy_line(line, linecount)
                 else:
@@ -284,6 +303,10 @@ class Converter:
                         self.parse_interface_line(line, linecount)
                     elif RE_VROUTER.search(line):
                         self.parse_vrouter_line(line, linecount)
+                    elif RE_IKE.search(line):
+                        self.parse_ike_line(line, linecount)
+                    elif RE_VPN.search(line):
+                        self.parse_vpn_line(line, linecount)
                     elif is_supported_service_definition(line):
                         self._parse_service_line(line, linecount)
                     elif RE_GROUP_SERVICE.search(line):
@@ -300,9 +323,11 @@ class Converter:
                         )
 
         self.render_interfaces()
+        self.render_vpns()
         self.render_routing()
         ordered_policies = self._ordered_policies()
         self.render_nat(ordered_policies)
+        self.render_idp(ordered_policies)
         self.render_policies(ordered_policies)
         self.state.diagnostics.sort(
             key=lambda diagnostic: (
@@ -1851,6 +1876,1064 @@ class Converter:
                 continue
             self.convert_config(f"{peer_group_prefix} neighbor {peer.address}")
 
+    @staticmethod
+    def _redact_ike_preshare(line: str) -> str:
+        parts: list[str] = []
+        cursor = 0
+        search_start = 0
+        while match := re.search(r"\bpreshare\b", line[search_start:], re.IGNORECASE):
+            match_end = search_start + match.end()
+            token_start = match_end
+            while token_start < len(line) and line[token_start].isspace():
+                token_start += 1
+            if token_start == len(line):
+                break
+
+            quote = None
+            index = token_start
+            while index < len(line):
+                character = line[index]
+                if character == "\\" and quote != "'" and index + 1 < len(line):
+                    index += 2
+                    continue
+                if character in {'"', "'"}:
+                    if quote is None:
+                        quote = character
+                    elif character == quote:
+                        quote = None
+                    index += 1
+                    continue
+                if character.isspace() and quote is None:
+                    break
+                index += 1
+            parts.extend((line[cursor:token_start], "<redacted>"))
+            cursor = index
+            search_start = index
+        parts.append(line[cursor:])
+        return "".join(parts)
+
+    @staticmethod
+    def _normalized_name_is_available(
+        objects: dict[str, object],
+        raw_name: str,
+    ) -> bool:
+        normalized = sanity_check_naming(raw_name)
+        return not any(
+            getattr(existing, "name", None) == normalized
+            for existing in objects.values()
+        )
+
+    def _manual_review(self, warning: str) -> None:
+        if warning not in self.state.manual_review_warnings:
+            self.state.manual_review_warnings.append(warning)
+
+    def _map_dh_group(
+        self,
+        value: str,
+        line: str,
+        line_number: int,
+    ) -> str | None:
+        normalized = value.lower().removeprefix("group").removeprefix("g")
+        if not normalized.isdigit() or int(normalized) not in {
+            1,
+            2,
+            5,
+            14,
+            15,
+            16,
+            19,
+            20,
+            21,
+        }:
+            self.record_failure(
+                line,
+                f"unsupported IKE Diffie-Hellman group: {value}",
+                line_number,
+            )
+            return None
+        group = f"group{int(normalized)}"
+        if group in {"group1", "group2", "group5"}:
+            self.record_failure(
+                line,
+                (
+                    f"deprecated IKE Diffie-Hellman {group} preserved; "
+                    "use group14 or stronger after peer validation"
+                ),
+                line_number,
+            )
+        return group
+
+    def _map_encryption(
+        self,
+        value: str,
+        line: str,
+        line_number: int,
+    ) -> str | None:
+        normalized = value.lower().replace("-", "")
+        mapped = {
+            "aes128": "aes-128-cbc",
+            "aes192": "aes-192-cbc",
+            "aes256": "aes-256-cbc",
+            "3des": "3des-cbc",
+        }.get(normalized)
+        if mapped is None:
+            reason = (
+                "DES encryption is deprecated and is not emitted"
+                if normalized == "des"
+                else f"unsupported IKE/IPsec encryption algorithm: {value}"
+            )
+            self.record_failure(line, reason, line_number)
+            return None
+        if mapped == "3des-cbc":
+            self.record_failure(
+                line,
+                "deprecated 3DES encryption preserved; migrate to AES after peer validation",
+                line_number,
+            )
+        return mapped
+
+    def _map_authentication(
+        self,
+        value: str,
+        phase: str,
+        line: str,
+        line_number: int,
+    ) -> str | None:
+        normalized = value.lower().replace("_", "-")
+        if normalized in {"md5", "hmac-md5"}:
+            self.record_failure(
+                line,
+                "MD5 authentication is deprecated and is not emitted",
+                line_number,
+            )
+            return None
+        if normalized in {"sha", "sha1", "sha-1"}:
+            self.record_failure(
+                line,
+                "deprecated SHA-1 authentication preserved; migrate to SHA-256",
+                line_number,
+            )
+            return "sha1" if phase == "ike" else "hmac-sha1-96"
+        if normalized in {"sha256", "sha-256", "sha2-256"}:
+            return "sha-256" if phase == "ike" else "hmac-sha-256-128"
+        if normalized in {"sha384", "sha-384", "sha2-384"}:
+            return "sha-384" if phase == "ike" else "hmac-sha-384"
+        self.record_failure(
+            line,
+            f"unsupported {phase.upper()} authentication algorithm: {value}",
+            line_number,
+        )
+        return None
+
+    @staticmethod
+    def _parse_lifetime(value: str) -> int | None:
+        try:
+            lifetime = int(value)
+        except ValueError:
+            return None
+        return lifetime if 180 <= lifetime <= 86400 else None
+
+    def parse_ike_line(self, line: str, line_number: int) -> None:
+        safe_line = self._redact_ike_preshare(line)
+        try:
+            tokens = shlex.split(line)
+        except ValueError:
+            self.record_failure(safe_line, "malformed IKE definition", line_number)
+            return
+
+        if len(tokens) < 4 or tokens[:2] != ["set", "ike"]:
+            self.record_failure(safe_line, "malformed IKE definition", line_number)
+            return
+
+        command = tokens[2].lower()
+        if command == "p1-proposal":
+            self._parse_ike_proposal(tokens, safe_line, line_number)
+        elif command == "p2-proposal":
+            self._parse_ipsec_proposal(tokens, safe_line, line_number)
+        elif command == "gateway":
+            self._parse_ike_gateway(tokens, safe_line, line_number)
+        else:
+            self.record_failure(
+                safe_line,
+                f"unsupported IKE command: {tokens[2]}",
+                line_number,
+            )
+
+    def _parse_ike_proposal(
+        self,
+        tokens: list[str],
+        line: str,
+        line_number: int,
+    ) -> None:
+        if (
+            len(tokens) != 11
+            or tokens[4].lower() != "preshare"
+            or tokens[6].lower() != "esp"
+            or tokens[9].lower() not in {"second", "seconds"}
+        ):
+            self.record_failure(
+                line, "malformed or unsupported Phase 1 proposal", line_number
+            )
+            return
+        name = tokens[3]
+        if name in self.state.ike_proposals:
+            self.record_failure(
+                line, f'duplicate Phase 1 proposal: "{name}"', line_number
+            )
+            return
+        if not self._normalized_name_is_available(self.state.ike_proposals, name):
+            self.record_failure(
+                line,
+                f'Phase 1 proposal name collides after Junos normalization: "{name}"',
+                line_number,
+            )
+            return
+        dh_group = self._map_dh_group(tokens[5], line, line_number)
+        encryption = self._map_encryption(tokens[7], line, line_number)
+        authentication = self._map_authentication(tokens[8], "ike", line, line_number)
+        lifetime = self._parse_lifetime(tokens[10])
+        if lifetime is None:
+            self.record_failure(
+                line,
+                "IKE proposal lifetime must be between 180 and 86400 seconds",
+                line_number,
+            )
+        if None in (dh_group, encryption, authentication, lifetime):
+            return
+        self.state.ike_proposals[name] = IkeProposalModel(
+            name=sanity_check_naming(name),
+            authentication_method="pre-shared-keys",
+            dh_group=dh_group,
+            authentication_algorithm=authentication,
+            encryption_algorithm=encryption,
+            lifetime_seconds=lifetime,
+            line_number=line_number,
+            source_line=line,
+        )
+
+    def _parse_ipsec_proposal(
+        self,
+        tokens: list[str],
+        line: str,
+        line_number: int,
+    ) -> None:
+        if (
+            len(tokens) != 10
+            or tokens[5].lower() != "esp"
+            or tokens[8].lower() not in {"second", "seconds"}
+        ):
+            self.record_failure(
+                line, "malformed or unsupported Phase 2 proposal", line_number
+            )
+            return
+        name = tokens[3]
+        if name in self.state.ipsec_proposals:
+            self.record_failure(
+                line, f'duplicate Phase 2 proposal: "{name}"', line_number
+            )
+            return
+        if not self._normalized_name_is_available(self.state.ipsec_proposals, name):
+            self.record_failure(
+                line,
+                f'Phase 2 proposal name collides after Junos normalization: "{name}"',
+                line_number,
+            )
+            return
+        pfs_token = tokens[4].lower()
+        pfs_group = (
+            None
+            if pfs_token in {"nopfs", "no-pfs"}
+            else self._map_dh_group(pfs_token, line, line_number)
+        )
+        encryption = self._map_encryption(tokens[6], line, line_number)
+        authentication = self._map_authentication(tokens[7], "ipsec", line, line_number)
+        lifetime = self._parse_lifetime(tokens[9])
+        if lifetime is None:
+            self.record_failure(
+                line,
+                "IPsec proposal lifetime must be between 180 and 86400 seconds",
+                line_number,
+            )
+        if None in (encryption, authentication, lifetime) or (
+            pfs_token not in {"nopfs", "no-pfs"} and pfs_group is None
+        ):
+            return
+        self.state.ipsec_proposals[name] = IpsecProposalModel(
+            name=sanity_check_naming(name),
+            protocol="esp",
+            authentication_algorithm=authentication,
+            encryption_algorithm=encryption,
+            lifetime_seconds=lifetime,
+            pfs_group=pfs_group,
+            line_number=line_number,
+            source_line=line,
+        )
+
+    def _parse_ike_gateway(
+        self,
+        tokens: list[str],
+        line: str,
+        line_number: int,
+    ) -> None:
+        name = tokens[3]
+        if len(tokens) == 5 and tokens[4].lower() == "nat-traversal":
+            gateway = self.state.ike_gateways.get(name)
+            if gateway is None:
+                self.record_failure(
+                    line,
+                    f'VPN NAT traversal references undefined IKE gateway: "{name}"',
+                    line_number,
+                )
+            else:
+                gateway.nat_traversal = True
+            return
+        if name in self.state.ike_gateways or len(tokens) < 9:
+            reason = (
+                f'duplicate IKE gateway: "{name}"'
+                if name in self.state.ike_gateways
+                else "malformed or unsupported IKE gateway"
+            )
+            self.record_failure(line, reason, line_number)
+            return
+        if not self._normalized_name_is_available(self.state.ike_gateways, name):
+            self.record_failure(
+                line,
+                f'IKE gateway name collides after Junos normalization: "{name}"',
+                line_number,
+            )
+            return
+
+        endpoint_kind = tokens[4].lower()
+        if endpoint_kind not in {"address", "dynamic"}:
+            self.record_failure(
+                line, "IKE gateway requires an address or dynamic ID", line_number
+            )
+            return
+        endpoint = tokens[5]
+        if endpoint_kind == "address":
+            try:
+                ipaddress.ip_address(endpoint)
+            except ValueError:
+                if not re.fullmatch(
+                    r"[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?", endpoint
+                ):
+                    self.record_failure(
+                        line, "invalid IKE gateway peer address", line_number
+                    )
+                    return
+        elif self._identity_clause(endpoint) is None:
+            self.record_failure(
+                line,
+                "invalid dynamic IKE gateway identity",
+                line_number,
+            )
+            return
+
+        index = 6
+        exchange_mode = "main"
+        outgoing_interface = None
+        proposal_name = None
+        local_id = None
+        preshared_key_omitted = False
+        nat_traversal = False
+        while index < len(tokens):
+            option = tokens[index].lower()
+            if option in {"main", "aggressive"}:
+                exchange_mode = option
+                index += 1
+            elif option == "outgoing-interface" and index + 1 < len(tokens):
+                outgoing_interface = tokens[index + 1]
+                index += 2
+            elif option == "local-id" and index + 1 < len(tokens):
+                local_id = tokens[index + 1]
+                index += 2
+            elif option == "preshare" and index + 1 < len(tokens):
+                preshared_key_omitted = True
+                index += 2
+            elif option == "proposal" and index + 1 < len(tokens):
+                proposal_name = tokens[index + 1]
+                index += 2
+            elif option == "nat-traversal":
+                nat_traversal = True
+                index += 1
+            elif option == "sec-level":
+                self.record_failure(
+                    line,
+                    "IKE security-level bundles are ambiguous; select an explicit proposal",
+                    line_number,
+                )
+                return
+            else:
+                self.record_failure(
+                    line,
+                    f"unsupported IKE gateway option: {' '.join(tokens[index:])}",
+                    line_number,
+                )
+                return
+
+        if outgoing_interface is None or proposal_name is None:
+            self.record_failure(
+                line,
+                "IKE gateway requires outgoing-interface and proposal options",
+                line_number,
+            )
+            return
+        if local_id is not None and self._identity_clause(local_id) is None:
+            self.record_failure(line, "invalid IKE local identity", line_number)
+            return
+        self.state.ike_gateways[name] = IkeGatewayModel(
+            name=sanity_check_naming(name),
+            endpoint_kind=endpoint_kind,
+            endpoint=endpoint,
+            exchange_mode=exchange_mode,
+            outgoing_interface=outgoing_interface,
+            proposal_name=proposal_name,
+            line_number=line_number,
+            source_line=line,
+            local_id=local_id,
+            preshared_key_omitted=preshared_key_omitted,
+            nat_traversal=nat_traversal,
+        )
+        if preshared_key_omitted:
+            self.record_failure(
+                line,
+                (
+                    "IKE preshared key omitted; configure a Junos pre-shared-key "
+                    "manually on the generated IKE policy"
+                ),
+                line_number,
+            )
+
+    def parse_vpn_line(self, line: str, line_number: int) -> None:
+        try:
+            tokens = shlex.split(line)
+        except ValueError:
+            self.record_failure(line, "malformed VPN definition", line_number)
+            return
+        if len(tokens) < 5 or tokens[:2] != ["set", "vpn"]:
+            self.record_failure(line, "malformed VPN definition", line_number)
+            return
+
+        name = tokens[2]
+        attributes = tokens[3:]
+        if attributes[:2] == ["bind", "interface"] and len(attributes) == 3:
+            vpn = self.state.ipsec_vpns.get(name)
+            if vpn is None:
+                self.record_failure(
+                    line,
+                    f'VPN interface binding references undefined VPN: "{name}"',
+                    line_number,
+                )
+            else:
+                vpn.bind_interface = attributes[2]
+            return
+        if (
+            len(attributes) == 5
+            and attributes[0] == "id"
+            and attributes[2:4] == ["bind", "interface"]
+        ):
+            vpn = self.state.ipsec_vpns.get(name)
+            if vpn is None:
+                self.record_failure(
+                    line,
+                    f'VPN interface binding references undefined VPN: "{name}"',
+                    line_number,
+                )
+            else:
+                vpn.bind_interface = attributes[4]
+            return
+        if attributes and attributes[0] == "proxy-id":
+            vpn = self.state.ipsec_vpns.get(name)
+            if vpn is None:
+                self.record_failure(
+                    line,
+                    f'proxy ID references undefined VPN: "{name}"',
+                    line_number,
+                )
+                return
+            if (
+                len(attributes) != 6
+                or attributes[1] != "local-ip"
+                or attributes[3] != "remote-ip"
+            ):
+                self.record_failure(
+                    line, "malformed or unsupported VPN proxy ID", line_number
+                )
+                return
+            try:
+                local = ipaddress.ip_network(attributes[2], strict=False)
+                remote = ipaddress.ip_network(attributes[4], strict=False)
+            except ValueError:
+                self.record_failure(line, "invalid VPN proxy ID prefix", line_number)
+                return
+            if local.version != remote.version:
+                self.record_failure(
+                    line,
+                    "VPN proxy ID local and remote prefixes must use the same family",
+                    line_number,
+                )
+                return
+            service = attributes[5].lower()
+            if service != "any":
+                self.record_failure(
+                    line,
+                    "VPN proxy ID services other than ANY are unsupported",
+                    line_number,
+                )
+                return
+            vpn.proxy_local = str(local)
+            vpn.proxy_remote = str(remote)
+            vpn.proxy_service = "any"
+            return
+
+        if name in self.state.ipsec_vpns:
+            self.record_failure(
+                line, f'duplicate VPN definition: "{name}"', line_number
+            )
+            return
+        if not self._normalized_name_is_available(self.state.ipsec_vpns, name):
+            self.record_failure(
+                line,
+                f'VPN name collides after Junos normalization: "{name}"',
+                line_number,
+            )
+            return
+        if len(attributes) < 4 or attributes[0] != "gateway":
+            self.record_failure(
+                line, "malformed or unsupported VPN definition", line_number
+            )
+            return
+        gateway_name = attributes[1]
+        proposal_name = None
+        tunnel_mode = False
+        anti_replay = True
+        index = 2
+        while index < len(attributes):
+            option = attributes[index].lower()
+            if option == "proposal" and index + 1 < len(attributes):
+                proposal_name = attributes[index + 1]
+                index += 2
+            elif option == "replay":
+                anti_replay = True
+                index += 1
+            elif option == "no-replay":
+                anti_replay = False
+                index += 1
+            elif option == "tunnel":
+                tunnel_mode = True
+                index += 1
+            elif option == "idletime" and index + 1 < len(attributes):
+                if attributes[index + 1] != "0":
+                    self.record_failure(
+                        line,
+                        "nonzero ScreenOS VPN idle time requires manual migration",
+                        line_number,
+                    )
+                    return
+                index += 2
+            elif option == "sec-level":
+                self.record_failure(
+                    line,
+                    "VPN security-level bundles are ambiguous; select an explicit proposal",
+                    line_number,
+                )
+                return
+            else:
+                self.record_failure(
+                    line,
+                    f"unsupported VPN option: {' '.join(attributes[index:])}",
+                    line_number,
+                )
+                return
+        if proposal_name is None or not tunnel_mode:
+            self.record_failure(
+                line,
+                "VPN requires tunnel mode and an explicit Phase 2 proposal",
+                line_number,
+            )
+            return
+        self.state.ipsec_vpns[name] = IpsecVpnModel(
+            name=sanity_check_naming(name),
+            gateway_name=gateway_name,
+            proposal_name=proposal_name,
+            line_number=line_number,
+            source_line=line,
+            anti_replay=anti_replay,
+        )
+
+    def _builtin_ike_proposal(
+        self,
+        name: str,
+        gateway: IkeGatewayModel,
+    ) -> IkeProposalModel | None:
+        match = re.fullmatch(
+            r"pre-g(?P<group>\d+)-(?P<encryption>aes(?:128|192|256)|3des|des)-"
+            r"(?P<authentication>sha(?:-?1|-?256)?|md5)",
+            name,
+            re.IGNORECASE,
+        )
+        if match is None:
+            return None
+        group = self._map_dh_group(
+            match["group"], gateway.source_line, gateway.line_number
+        )
+        encryption = self._map_encryption(
+            match["encryption"], gateway.source_line, gateway.line_number
+        )
+        authentication = self._map_authentication(
+            match["authentication"], "ike", gateway.source_line, gateway.line_number
+        )
+        if None in (group, encryption, authentication):
+            return None
+        return IkeProposalModel(
+            name=sanity_check_naming(name),
+            authentication_method="pre-shared-keys",
+            dh_group=group,
+            authentication_algorithm=authentication,
+            encryption_algorithm=encryption,
+            lifetime_seconds=28800,
+            line_number=gateway.line_number,
+            source_line=gateway.source_line,
+        )
+
+    def _builtin_ipsec_proposal(
+        self,
+        name: str,
+        vpn: IpsecVpnModel,
+    ) -> IpsecProposalModel | None:
+        match = re.fullmatch(
+            r"(?P<pfs>nopfs|g\d+)-esp-"
+            r"(?P<encryption>aes(?:128|192|256)|3des|des)-"
+            r"(?P<authentication>sha(?:-?1|-?256)?|md5)",
+            name,
+            re.IGNORECASE,
+        )
+        if match is None:
+            return None
+        pfs_group = None
+        if match["pfs"].lower() != "nopfs":
+            pfs_group = self._map_dh_group(
+                match["pfs"], vpn.source_line, vpn.line_number
+            )
+            if pfs_group is None:
+                return None
+        encryption = self._map_encryption(
+            match["encryption"], vpn.source_line, vpn.line_number
+        )
+        authentication = self._map_authentication(
+            match["authentication"], "ipsec", vpn.source_line, vpn.line_number
+        )
+        if None in (encryption, authentication):
+            return None
+        return IpsecProposalModel(
+            name=sanity_check_naming(name),
+            protocol="esp",
+            authentication_algorithm=authentication,
+            encryption_algorithm=encryption,
+            lifetime_seconds=3600,
+            pfs_group=pfs_group,
+            line_number=vpn.line_number,
+            source_line=vpn.source_line,
+        )
+
+    @staticmethod
+    def _identity_clause(value: str) -> str | None:
+        try:
+            address = ipaddress.ip_address(value)
+        except ValueError:
+            hostname = (
+                r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?"
+                r"(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*"
+            )
+            if re.fullmatch(hostname, value):
+                return "hostname"
+            if re.fullmatch(rf"[A-Za-z0-9][A-Za-z0-9._+-]{{0,127}}@{hostname}", value):
+                return "user-at-hostname"
+            return None
+        return "inet6" if address.version == 6 else "inet"
+
+    def render_vpns(self) -> None:
+        if not self.state.ike_gateways and not self.state.ipsec_vpns:
+            return
+        self._manual_review(
+            "IPsec output requires manual validation of peer identities, routing, "
+            "NAT traversal, cryptographic policy, and omitted preshared keys before deployment."
+        )
+        emitted_ike_proposals: dict[str, tuple[object, ...]] = {}
+        emitted_ike_gateways: set[str] = set()
+        emitted_ipsec_proposals: dict[str, tuple[object, ...]] = {}
+
+        for source_vpn_name, vpn in self.state.ipsec_vpns.items():
+            gateway = self.state.ike_gateways.get(vpn.gateway_name)
+            if gateway is None:
+                self.record_failure(
+                    vpn.source_line,
+                    f'VPN references undefined IKE gateway: "{vpn.gateway_name}"',
+                    vpn.line_number,
+                )
+                continue
+            ike_proposal = self.state.ike_proposals.get(gateway.proposal_name)
+            if ike_proposal is None:
+                ike_proposal = self._builtin_ike_proposal(
+                    gateway.proposal_name, gateway
+                )
+            if ike_proposal is None:
+                self.record_failure(
+                    gateway.source_line,
+                    f'undefined or unmappable Phase 1 proposal: "{gateway.proposal_name}"',
+                    gateway.line_number,
+                )
+                continue
+            ipsec_proposal = self.state.ipsec_proposals.get(vpn.proposal_name)
+            if ipsec_proposal is None:
+                ipsec_proposal = self._builtin_ipsec_proposal(vpn.proposal_name, vpn)
+            if ipsec_proposal is None:
+                self.record_failure(
+                    vpn.source_line,
+                    f'undefined or unmappable Phase 2 proposal: "{vpn.proposal_name}"',
+                    vpn.line_number,
+                )
+                continue
+            ike_fingerprint = (
+                ike_proposal.authentication_method,
+                ike_proposal.dh_group,
+                ike_proposal.authentication_algorithm,
+                ike_proposal.encryption_algorithm,
+                ike_proposal.lifetime_seconds,
+            )
+            emitted_ike_fingerprint = emitted_ike_proposals.get(ike_proposal.name)
+            if (
+                emitted_ike_fingerprint is not None
+                and emitted_ike_fingerprint != ike_fingerprint
+            ):
+                self.record_failure(
+                    gateway.source_line,
+                    (
+                        "Phase 1 proposal collides after Junos normalization with "
+                        f'different parameters: "{gateway.proposal_name}"'
+                    ),
+                    gateway.line_number,
+                )
+                continue
+            ipsec_fingerprint = (
+                ipsec_proposal.protocol,
+                ipsec_proposal.authentication_algorithm,
+                ipsec_proposal.encryption_algorithm,
+                ipsec_proposal.lifetime_seconds,
+                ipsec_proposal.pfs_group,
+            )
+            emitted_ipsec_fingerprint = emitted_ipsec_proposals.get(ipsec_proposal.name)
+            if (
+                emitted_ipsec_fingerprint is not None
+                and emitted_ipsec_fingerprint != ipsec_fingerprint
+            ):
+                self.record_failure(
+                    vpn.source_line,
+                    (
+                        "Phase 2 proposal collides after Junos normalization with "
+                        f'different parameters: "{vpn.proposal_name}"'
+                    ),
+                    vpn.line_number,
+                )
+                continue
+            logical_external = self.state.interface_ns_to_junos.get(
+                gateway.outgoing_interface
+            )
+            if (
+                logical_external is None
+                or gateway.outgoing_interface not in self.state.rendered_interfaces
+            ):
+                self.record_failure(
+                    gateway.source_line,
+                    (
+                        "IKE gateway outgoing interface is undefined or was not rendered: "
+                        f'"{gateway.outgoing_interface}"'
+                    ),
+                    gateway.line_number,
+                )
+                continue
+            logical_bind = None
+            if vpn.bind_interface is not None:
+                bind_model = self.state.interfaces.get(vpn.bind_interface)
+                if (
+                    bind_model is None
+                    or bind_model.mapping.kind != "tunnel"
+                    or vpn.bind_interface not in self.state.rendered_interfaces
+                ):
+                    self.record_failure(
+                        vpn.source_line,
+                        (
+                            "route-based VPN bind interface must reference a rendered "
+                            f'ScreenOS tunnel interface: "{vpn.bind_interface}"'
+                        ),
+                        vpn.line_number,
+                    )
+                    continue
+                logical_bind = bind_model.mapping.logical_name
+
+            if emitted_ike_fingerprint is None:
+                prefix = f"set security ike proposal {ike_proposal.name}"
+                self.convert_config(
+                    f"{prefix} authentication-method {ike_proposal.authentication_method}"
+                )
+                self.convert_config(f"{prefix} dh-group {ike_proposal.dh_group}")
+                self.convert_config(
+                    f"{prefix} authentication-algorithm "
+                    f"{ike_proposal.authentication_algorithm}"
+                )
+                self.convert_config(
+                    f"{prefix} encryption-algorithm {ike_proposal.encryption_algorithm}"
+                )
+                self.convert_config(
+                    f"{prefix} lifetime-seconds {ike_proposal.lifetime_seconds}"
+                )
+                emitted_ike_proposals[ike_proposal.name] = ike_fingerprint
+
+            ike_policy_name = sanity_check_naming(f"{gateway.name}_ike_policy")
+            if gateway.name not in emitted_ike_gateways:
+                policy_prefix = f"set security ike policy {ike_policy_name}"
+                self.convert_config(f"{policy_prefix} mode {gateway.exchange_mode}")
+                self.convert_config(f"{policy_prefix} proposals {ike_proposal.name}")
+                gateway_prefix = f"set security ike gateway {gateway.name}"
+                self.convert_config(f"{gateway_prefix} ike-policy {ike_policy_name}")
+                if gateway.endpoint_kind == "address":
+                    self.convert_config(f"{gateway_prefix} address {gateway.endpoint}")
+                else:
+                    identity_type = self._identity_clause(gateway.endpoint)
+                    assert identity_type is not None
+                    self.convert_config(
+                        f"{gateway_prefix} dynamic {identity_type} {gateway.endpoint}"
+                    )
+                self.convert_config(
+                    f"{gateway_prefix} external-interface {logical_external}"
+                )
+                if gateway.local_id is not None:
+                    identity_type = self._identity_clause(gateway.local_id)
+                    assert identity_type is not None
+                    self.convert_config(
+                        f"{gateway_prefix} local-identity {identity_type} "
+                        f"{gateway.local_id}"
+                    )
+                emitted_ike_gateways.add(gateway.name)
+
+            if emitted_ipsec_fingerprint is None:
+                prefix = f"set security ipsec proposal {ipsec_proposal.name}"
+                self.convert_config(f"{prefix} protocol {ipsec_proposal.protocol}")
+                self.convert_config(
+                    f"{prefix} authentication-algorithm "
+                    f"{ipsec_proposal.authentication_algorithm}"
+                )
+                self.convert_config(
+                    f"{prefix} encryption-algorithm {ipsec_proposal.encryption_algorithm}"
+                )
+                self.convert_config(
+                    f"{prefix} lifetime-seconds {ipsec_proposal.lifetime_seconds}"
+                )
+                emitted_ipsec_proposals[ipsec_proposal.name] = ipsec_fingerprint
+
+            ipsec_policy_name = sanity_check_naming(f"{vpn.name}_ipsec_policy")
+            policy_prefix = f"set security ipsec policy {ipsec_policy_name}"
+            self.convert_config(f"{policy_prefix} proposals {ipsec_proposal.name}")
+            if ipsec_proposal.pfs_group is not None:
+                self.convert_config(
+                    f"{policy_prefix} perfect-forward-secrecy keys "
+                    f"{ipsec_proposal.pfs_group}"
+                )
+            vpn_prefix = f"set security ipsec vpn {vpn.name}"
+            self.convert_config(f"{vpn_prefix} ike gateway {gateway.name}")
+            self.convert_config(f"{vpn_prefix} ike ipsec-policy {ipsec_policy_name}")
+            if not vpn.anti_replay:
+                self.convert_config(f"{vpn_prefix} ike no-anti-replay")
+            if logical_bind is not None:
+                self.convert_config(f"{vpn_prefix} bind-interface {logical_bind}")
+            if vpn.proxy_local is not None:
+                self.convert_config(
+                    f"{vpn_prefix} ike proxy-identity local {vpn.proxy_local}"
+                )
+                self.convert_config(
+                    f"{vpn_prefix} ike proxy-identity remote {vpn.proxy_remote}"
+                )
+                self.convert_config(
+                    f"{vpn_prefix} ike proxy-identity service {vpn.proxy_service}"
+                )
+            self.state.rendered_vpns.add(source_vpn_name)
+
+    _IDP_GROUP_PATTERN: Final[re.Pattern[str]] = re.compile(
+        r"^(?P<severity>CRITICAL|HIGH|MEDIUM|LOW|INFO):"
+        r"(?:(?P<service>[A-Z0-9_-]+):(?P<kind>SIGS|ANOM))?$",
+        re.IGNORECASE,
+    )
+
+    def _parse_idp_rule(
+        self,
+        tokens: list[str],
+        index: int,
+        line: str,
+        line_number: int,
+    ) -> tuple[IdpRuleModel, int] | None:
+        if (
+            index + 3 >= len(tokens)
+            or tokens[index].lower() != "attack"
+            or tokens[index + 2].lower() != "action"
+        ):
+            self.record_failure(
+                line, "malformed Deep Inspection attachment", line_number
+            )
+            return None
+        attack_group = tokens[index + 1]
+        match = self._IDP_GROUP_PATTERN.fullmatch(attack_group)
+        if match is None:
+            self.record_failure(
+                line,
+                (
+                    f'unmappable ScreenOS attack group: "{attack_group}"; '
+                    "no Junos signature substitution was made"
+                ),
+                line_number,
+            )
+            return None
+        action = {
+            "close": "close-client-and-server",
+            "close-client": "close-client",
+            "close-server": "close-server",
+            "drop": "drop-connection",
+        }.get(tokens[index + 3].lower())
+        if action is None:
+            self.record_failure(
+                line,
+                f"unsupported Deep Inspection action: {tokens[index + 3]}",
+                line_number,
+            )
+            return None
+        severity = {
+            "critical": "critical",
+            "high": "major",
+            "medium": "minor",
+            "low": "warning",
+            "info": "info",
+        }[match["severity"].lower()]
+        kind = match["kind"]
+        return (
+            IdpRuleModel(
+                attack_group=attack_group,
+                dynamic_group_name=sanity_check_naming(
+                    f"screenos_{attack_group.replace(':', '_')}"
+                ),
+                service=match["service"].upper() if match["service"] else "",
+                severity=severity,
+                attack_type=(
+                    "signature" if kind and kind.upper() == "SIGS" else "anomaly"
+                ),
+                action=action,
+                log_attacks=True,
+                line_number=line_number,
+                source_line=line,
+            ),
+            index + 4,
+        )
+
+    def parse_idp_continuation(self, line: str, line_number: int) -> None:
+        try:
+            tokens = shlex.split(line)
+        except ValueError:
+            tokens = []
+        policy = self.state.current_policy
+        if policy is None or not tokens or tokens[0].lower() != "set":
+            self.record_failure(
+                line,
+                "Deep Inspection attachment has no resolvable base policy",
+                line_number,
+            )
+            return
+        if policy.scope != "zone" or policy.action != "permit" or policy.tunnel_vpn:
+            policy.idp_invalid = True
+            self.record_failure(
+                line,
+                "Deep Inspection requires a zone permit policy without a VPN tunnel action",
+                line_number,
+            )
+            return
+        parsed = self._parse_idp_rule(tokens, 1, line, line_number)
+        if parsed is None or parsed[1] != len(tokens):
+            policy.idp_invalid = True
+            if parsed is not None:
+                self.record_failure(
+                    line,
+                    "unsupported Deep Inspection attachment options",
+                    line_number,
+                )
+            return
+        policy.idp_rules.append(parsed[0])
+
+    @staticmethod
+    def _idp_policy_name(policy: PolicyModel) -> str:
+        return sanity_check_naming(
+            f"screenos_{policy.source_zone}_{policy.destination_zone}_"
+            f"{policy.policy_name}_idp"
+        )
+
+    def render_idp(self, ordered_policies: list[PolicyModel]) -> None:
+        policies = [
+            policy
+            for policy in ordered_policies
+            if policy.idp_rules
+            and not policy.idp_invalid
+            and not policy.disabled
+            and (policy.scope, policy.policy_id) not in self.state.disabled_policy_keys
+        ]
+        if not policies:
+            return
+        self._manual_review(
+            "IDP output requires a current Junos signature package and license review; "
+            "validate dynamic group membership, actions, and policy attachment before deployment."
+        )
+        if len(policies) > 1:
+            self.convert_config(
+                f"set security idp default-policy {self._idp_policy_name(policies[0])}"
+            )
+        rendered_groups: set[str] = set()
+        for policy in policies:
+            policy_key = (policy.scope, policy.policy_id)
+            idp_policy_name = self._idp_policy_name(policy)
+            for index, rule in enumerate(policy.idp_rules, start=1):
+                group_prefix = (
+                    f"set security idp dynamic-attack-group {rule.dynamic_group_name}"
+                )
+                if rule.dynamic_group_name not in rendered_groups:
+                    self.convert_config(
+                        f"{group_prefix} filters severity values {rule.severity}"
+                    )
+                    if rule.service:
+                        self.convert_config(
+                            f"{group_prefix} filters service values {rule.service}"
+                        )
+                        self.convert_config(
+                            f"{group_prefix} filters type values {rule.attack_type}"
+                        )
+                    rendered_groups.add(rule.dynamic_group_name)
+                rule_prefix = (
+                    f"set security idp idp-policy {idp_policy_name} "
+                    f"rulebase-ips rule rule_{index:03d}"
+                )
+                self.convert_config(
+                    f"{rule_prefix} match from-zone {policy.source_zone}"
+                )
+                self.convert_config(
+                    f"{rule_prefix} match to-zone {policy.destination_zone}"
+                )
+                self.convert_config(f"{rule_prefix} match source-address any")
+                self.convert_config(f"{rule_prefix} match destination-address any")
+                self.convert_config(f"{rule_prefix} match application default")
+                self.convert_config(
+                    f"{rule_prefix} match attacks dynamic-attack-groups "
+                    f"{rule.dynamic_group_name}"
+                )
+                self.convert_config(f"{rule_prefix} then action {rule.action}")
+                if rule.log_attacks:
+                    self.convert_config(f"{rule_prefix} then notification log-attacks")
+                self.convert_config(f"{rule_prefix} then severity {rule.severity}")
+            self.state.rendered_idp_policies.add(policy_key)
+
     def parse_policy_line(self, line: str, line_number: int) -> None:
         self.state.current_policy = None
         try:
@@ -1913,6 +2996,66 @@ class Converter:
         policy_id = tokens[index + 1]
         index += 2
         policy_key = (scope, policy_id)
+
+        if index == len(tokens):
+            policy = next(
+                (
+                    candidate
+                    for candidate in self.state.policies
+                    if candidate.scope == scope and candidate.policy_id == policy_id
+                ),
+                None,
+            )
+            if policy is None:
+                self.record_failure(
+                    line,
+                    f"policy context references undefined {scope} policy {policy_id}",
+                    line_number,
+                )
+            else:
+                self.state.current_policy = policy
+            return
+
+        if tokens[index].lower() == "attack":
+            policy = next(
+                (
+                    candidate
+                    for candidate in self.state.policies
+                    if candidate.scope == scope and candidate.policy_id == policy_id
+                ),
+                None,
+            )
+            if policy is None:
+                self.record_failure(
+                    line,
+                    f"Deep Inspection attachment references undefined {scope} policy {policy_id}",
+                    line_number,
+                )
+                return
+            if policy.scope != "zone" or policy.action != "permit" or policy.tunnel_vpn:
+                policy.idp_invalid = True
+                self.record_failure(
+                    line,
+                    (
+                        "Deep Inspection requires a zone permit policy without "
+                        "a VPN tunnel action"
+                    ),
+                    line_number,
+                )
+                return
+            parsed_idp = self._parse_idp_rule(tokens, index, line, line_number)
+            if parsed_idp is None or parsed_idp[1] != len(tokens):
+                policy.idp_invalid = True
+                if parsed_idp is not None:
+                    self.record_failure(
+                        line,
+                        "unsupported Deep Inspection attachment options",
+                        line_number,
+                    )
+                return
+            policy.idp_rules.append(parsed_idp[0])
+            self.state.current_policy = policy
+            return
 
         if tokens[index:] == ["disable"]:
             self.state.disabled_policy_keys.add(policy_key)
@@ -2025,8 +3168,35 @@ class Converter:
                 line_number,
             )
             return
-        action = tokens[index].lower()
-        if action not in ("permit", "deny", "reject"):
+        action_token = tokens[index].lower()
+        tunnel_vpn = None
+        pair_policy_id = None
+        if action_token == "tunnel":
+            if index + 2 >= len(tokens) or tokens[index + 1].lower() != "vpn":
+                self.record_failure(line, "malformed policy VPN action", line_number)
+                return
+            action = "permit"
+            tunnel_vpn = tokens[index + 2]
+            index += 3
+            if index < len(tokens) and tokens[index].lower() == "id":
+                if index + 1 >= len(tokens):
+                    self.record_failure(line, "policy VPN id is missing", line_number)
+                    return
+                index += 2
+            if index < len(tokens) and tokens[index].lower() == "pair-policy":
+                if index + 1 >= len(tokens) or not tokens[index + 1].isdigit():
+                    self.record_failure(
+                        line,
+                        "policy VPN pair-policy target must be numeric",
+                        line_number,
+                    )
+                    return
+                pair_policy_id = tokens[index + 1]
+                index += 2
+        elif action_token in ("permit", "deny", "reject"):
+            action = action_token
+            index += 1
+        else:
             self.record_failure(
                 line,
                 f"unsupported policy action: {tokens[index]}",
@@ -2040,10 +3210,18 @@ class Converter:
                 line_number,
             )
             return
-        index += 1
+        if source_nat_kind is not None and tunnel_vpn is not None:
+            self.record_failure(
+                line,
+                "policy-based VPN actions cannot be combined with policy NAT-src",
+                line_number,
+            )
+            return
 
         log_enabled = False
         count_enabled = False
+        idp_rules: list[IdpRuleModel] = []
+        idp_invalid = False
         while index < len(tokens):
             option = tokens[index].lower()
             if option == "log":
@@ -2068,6 +3246,29 @@ class Converter:
                         line_number,
                     )
                     return
+            elif option == "attack":
+                if scope != "zone" or action != "permit" or tunnel_vpn is not None:
+                    self.record_failure(
+                        line,
+                        (
+                            "Deep Inspection requires a zone permit policy without "
+                            "a VPN tunnel action"
+                        ),
+                        line_number,
+                    )
+                    return
+                parsed_idp = self._parse_idp_rule(tokens, index, line, line_number)
+                if parsed_idp is None:
+                    if (
+                        index + 3 < len(tokens)
+                        and tokens[index + 2].lower() == "action"
+                    ):
+                        idp_invalid = True
+                        index += 4
+                        continue
+                    return
+                idp_rule, index = parsed_idp
+                idp_rules.append(idp_rule)
             else:
                 self.record_failure(
                     line,
@@ -2107,6 +3308,10 @@ class Converter:
             log=log_enabled,
             count=count_enabled,
             disabled=policy_key in self.state.disabled_policy_keys,
+            tunnel_vpn=tunnel_vpn,
+            pair_policy_id=pair_policy_id,
+            idp_rules=idp_rules,
+            idp_invalid=idp_invalid,
         )
         self.state.policies.append(policy)
         if source_nat_kind is not None:
@@ -2393,6 +3598,7 @@ class Converter:
                 continue
             if (
                 policy.disabled
+                or policy.idp_invalid
                 or (policy.scope, policy.policy_id) in self.state.disabled_policy_keys
             ):
                 continue
@@ -2504,9 +3710,63 @@ class Converter:
         self,
         ordered_policies: list[PolicyModel] | None = None,
     ) -> None:
+        policies = (
+            ordered_policies
+            if ordered_policies is not None
+            else self._ordered_policies()
+        )
+        policy_name_counts = Counter(
+            (policy.context, policy.policy_name)
+            for policy in policies
+            if not policy.disabled
+            and (policy.scope, policy.policy_id) not in self.state.disabled_policy_keys
+        )
+
+        def policy_can_render(policy: PolicyModel) -> bool:
+            policy_key = (policy.scope, policy.policy_id)
+            if (
+                policy.disabled
+                or policy_key in self.state.disabled_policy_keys
+                or policy.idp_invalid
+                or policy_name_counts[(policy.context, policy.policy_name)] != 1
+            ):
+                return False
+            source_zone = (
+                "global" if policy.scope == "global" else policy.source_zone or ""
+            )
+            destination_zone = (
+                "global" if policy.scope == "global" else policy.destination_zone or ""
+            )
+            if (
+                self._resolve_address(policy.source_addresses[0].name, source_zone)
+                is None
+                or self._resolve_address(
+                    policy.destination_addresses[0].name, destination_zone
+                )
+                is None
+                or self._resolve_service(policy.services[0].name) is None
+            ):
+                return False
+            if policy.idp_rules and policy_key not in self.state.rendered_idp_policies:
+                return False
+            if policy.tunnel_vpn is not None:
+                vpn = self.state.ipsec_vpns.get(policy.tunnel_vpn)
+                if (
+                    vpn is None
+                    or policy.tunnel_vpn not in self.state.rendered_vpns
+                    or vpn.bind_interface is not None
+                ):
+                    return False
+            return True
+
+        renderable_policy_keys = {
+            (policy.scope, policy.policy_id)
+            for policy in policies
+            if policy_can_render(policy)
+        }
         seen_names: set[tuple[tuple[str, str, str], str]] = set()
         rendered_policy_keys: set[tuple[str, str]] = set()
-        for policy in ordered_policies or self._ordered_policies():
+        for policy in policies:
             policy_key = (policy.scope, policy.policy_id)
             rendered_policy_keys.add(policy_key)
             if policy_key in self.state.disabled_policy_keys or policy.disabled:
@@ -2524,6 +3784,8 @@ class Converter:
                         line_number,
                     )
                     self.state.reported_disabled_policy_keys.add(policy_key)
+                continue
+            if policy.idp_invalid:
                 continue
 
             name_key = (policy.context, policy.policy_name)
@@ -2577,12 +3839,72 @@ class Converter:
                     f"to-zone {policy.destination_zone} policy {policy.policy_name}"
                 )
 
+            tunnel_action = None
+            if policy.tunnel_vpn is not None:
+                vpn = self.state.ipsec_vpns.get(policy.tunnel_vpn)
+                if vpn is None or policy.tunnel_vpn not in self.state.rendered_vpns:
+                    self.record_failure(
+                        policy.source_line,
+                        f'policy references undefined or unrendered VPN: "{policy.tunnel_vpn}"',
+                        policy.line_number,
+                    )
+                    continue
+                if vpn.bind_interface is not None:
+                    self.record_failure(
+                        policy.source_line,
+                        "policy tunnel action cannot reference a route-based VPN",
+                        policy.line_number,
+                    )
+                    continue
+                tunnel_action = f"{prefix} then permit tunnel ipsec-vpn {vpn.name}"
+                if policy.pair_policy_id is not None:
+                    pair_policy = next(
+                        (
+                            candidate
+                            for candidate in self.state.policies
+                            if candidate.scope == policy.scope
+                            and candidate.policy_id == policy.pair_policy_id
+                        ),
+                        None,
+                    )
+                    if (
+                        pair_policy is None
+                        or (pair_policy.scope, pair_policy.policy_id)
+                        not in renderable_policy_keys
+                        or pair_policy.tunnel_vpn != policy.tunnel_vpn
+                        or pair_policy.source_zone != policy.destination_zone
+                        or pair_policy.destination_zone != policy.source_zone
+                        or pair_policy.pair_policy_id != policy.policy_id
+                    ):
+                        self.record_failure(
+                            policy.source_line,
+                            (
+                                f"policy VPN pair-policy {policy.pair_policy_id} is "
+                                "undefined, uses a different VPN, or is not reciprocal"
+                            ),
+                            policy.line_number,
+                        )
+                        continue
+                    tunnel_action += f" pair-policy {pair_policy.policy_name}"
+            if policy.idp_rules and policy_key not in self.state.rendered_idp_policies:
+                self.record_failure(
+                    policy.source_line,
+                    "policy IDP attachment was not rendered",
+                    policy.line_number,
+                )
+                continue
+
             self.convert_config(f"{prefix} match source-address {base_source}")
             self.convert_config(
                 f"{prefix} match destination-address {base_destination}"
             )
             self.convert_config(f"{prefix} match application {base_service}")
-            self.convert_config(f"{prefix} then {policy.action}")
+            self.convert_config(tunnel_action or f"{prefix} then {policy.action}")
+            if policy.idp_rules:
+                self.convert_config(
+                    f"{prefix} then permit application-services idp-policy "
+                    f"{self._idp_policy_name(policy)}"
+                )
             if policy.log:
                 self.convert_config(f"{prefix} then log session-init")
                 self.convert_config(f"{prefix} then log session-close")
