@@ -84,8 +84,10 @@ Always review the generated configuration before deployment.
 ## Project Structure
 - `convert.py`: thin CLI entrypoint and argument parsing
 - `packages/converter_core.py`: conversion engine and state model
+- `packages/conversion_service.py`: request-scoped in-memory conversion API
 - `packages/conversion_models.py`: normalized interface, policy, routing, and NAT models
 - `packages/convert_service.py`: service parsing/conversion helpers
+- `packages/web_app.py`: Flask application factory, input validation, and routes
 - `packages/sanity_check_naming.py`: Junos-safe name normalization
 - `packages/ipy.py`: local IP utility module used for address conversion
 - `tests/`: pytest fixtures and regression tests
@@ -103,6 +105,7 @@ Always review the generated configuration before deployment.
 |-- requirements-dev-minimum.txt        # Exact supported dependency floors
 |-- requirements-dev-latest.txt         # Exact latest-compatible dependencies
 |-- pyproject.toml                       # Ruff, coverage, and pytest configuration
+|-- .dockerignore                       # Reproducible container build exclusions
 |-- docker/                             # Container build context
 |   `-- Dockerfile                      # Container image definition
 |-- docs/                               # Vendor reference docs
@@ -115,28 +118,36 @@ Always review the generated configuration before deployment.
 |   |-- __init__.py                     # Explicit package exports
 |   |-- converter_core.py               # Core conversion engine and state
 |   |-- conversion_models.py            # Normalized interface, policy, routing, and NAT models
+|   |-- conversion_service.py           # Request-scoped in-memory conversion API
 |   |-- convert_service.py              # Service conversion helpers
+|   |-- web_app.py                      # Flask application factory and routes
+|   |-- static/                         # Web application styles and behavior
+|   |-- templates/                      # Web application HTML templates
 |   |-- sanity_check_naming.py          # Name normalization for Junos compatibility
 |   `-- ipy.py                          # Local IP/network parsing utility
 |-- tests/                              # Regression and unit tests
 |   |-- conftest.py                     # Shared pytest fixtures
 |   |-- test_automation_contracts.py    # CI, dependency, and release contracts
 |   |-- test_cli.py                     # CLI path and diagnostics tests
+|   |-- test_conversion_service.py      # In-memory service and isolation tests
 |   |-- test_converter_smoke.py         # End-to-end smoke test
 |   |-- test_converter_syntax_coverage.py # Supported grammar tests
 |   |-- test_policy_interface_models.py # Interface mapping and shared policy model tests
 |   |-- test_routing_nat_models.py      # Routing and NAT model/reference tests
 |   |-- test_validation_fixtures.py     # Fixture validation harness
+|   |-- test_web_app.py                 # Flask request and security tests
 |   |-- fixtures/                       # Sanitized conversion fixtures
 |   |-- test_convert_service.py         # Service parser unit tests
 |   `-- test_sanity_check_naming.py     # Naming helper unit tests
 |-- scripts/                            # Local maintenance/helper scripts
+|   |-- container-smoke.sh              # Reusable CLI and web image smoke checks
 |   |-- update-readme-tree.sh           # Regenerates this README tree section
 |   `-- validate.sh                     # Shared local, CI, and release validation
 `-- .github/                            # Repository automation and CI config
     |-- dependabot.yml                  # Automated dependency updates
     `-- workflows/                      # GitHub Actions workflows
         |-- pr-validate.yml             # Required Python and quality CI
+        |-- container.yml               # Non-publishing image build and smoke test
         |-- prerelease-canary.yml       # Non-blocking Python/pytest canaries
         |-- codeql-analysis.yml         # Security analysis workflow
         |-- dependency-review.yml       # Vulnerable dependency gate
@@ -145,6 +156,9 @@ Always review the generated configuration before deployment.
 <!-- repo-tree:end -->
 
 ## Usage
+
+### Command line
+
 1. Place your full ScreenOS config in a text file (default: `input/netscreen_config.txt`).
 2. Run:
 
@@ -162,6 +176,22 @@ python3 convert.py \
   --log-level INFO
 ```
 
+### Web application
+
+The Flask application uses the same in-memory conversion service as the CLI.
+It accepts either pasted configuration or one UTF-8 `.txt` upload and keeps
+submitted configuration in memory only for the duration of the request.
+
+For local development:
+
+```bash
+python3 -m pip install -r requirements.txt
+flask --app 'packages.web_app:create_app()' run
+```
+
+Open `http://127.0.0.1:5000`. Flask's development server is not intended for
+production; the container uses Gunicorn instead.
+
 ## Output
 - Default output file: `outputs/converted_<YYYYMMDD_HHMMSS>.txt`
 - Contains generated Junos `set` commands.
@@ -175,11 +205,16 @@ python3 convert.py \
 - IPsec and IDP conversion adds an explicit `MANUAL REVIEW REQUIRED` warning.
   Validate peer IDs, keys, routing/NAT, algorithms, Junos version and platform,
   signature package contents, and IDP licensing before deployment.
+- The web application does not persist submitted configurations, but operators
+  must still protect network access and application logs as sensitive systems.
 
 ## Development
 
 ### Runtime Dependencies
-No external runtime dependencies are required.
+
+Flask and Gunicorn are exactly pinned in `requirements.txt` so release image
+builds use reviewed runtime versions. The CLI conversion path remains available
+inside the same environment.
 
 ### Dev Dependencies
 ```bash
@@ -210,12 +245,36 @@ the latest-compatible environment. See the
 [dependency and validation policy](docs/dependency-policy.md) for the
 version-boundary, coverage, vulnerability, and license rules.
 
-### Docker
+### Container
+
+Build and run the production web service locally:
+
 ```bash
 docker build -f docker/Dockerfile -t screenos-to-junos .
-docker run --rm -v "$PWD":/app screenos-to-junos \
-  python convert.py --input input/netscreen_config.txt --output outputs/converted_from_container.txt
+docker run --rm --read-only --tmpfs /tmp \
+  --cap-drop ALL --security-opt no-new-privileges \
+  -p 127.0.0.1:8080:8080 screenos-to-junos
 ```
+
+Open `http://127.0.0.1:8080`; the health endpoint is `/healthz`. The maximum
+submitted configuration defaults to 1 MiB and can be set at container start:
+
+```bash
+docker run --rm -p 127.0.0.1:8080:8080 \
+  -e SCREENOS_MAX_CONFIG_BYTES=2097152 screenos-to-junos
+```
+
+Released images are published as
+`ghcr.io/greyinghair/screenos_to_junos_converter`. Prefer immutable version or
+full-SHA tags for deployments, for example:
+
+```bash
+docker pull ghcr.io/greyinghair/screenos_to_junos_converter:v1.2.3
+```
+
+The package may require GitHub Container Registry authentication while it is
+private. Release retention and channel-tag behavior are documented in
+[repository maintenance](docs/repository-maintenance.md).
 
 ## Reference Documentation
 - `docs/screenos/` contains ScreenOS reference PDFs

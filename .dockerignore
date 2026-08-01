@@ -1,0 +1,16 @@
+.git
+.github
+.pytest_cache
+.ruff_cache
+.venv
+venv
+artifacts
+constraints
+docs
+tests
+*.pyc
+__pycache__
+CHANGELOG.md
+LICENSE
+readme.md
+requirements-dev*.txt

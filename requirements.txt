@@ -1,1 +1,3 @@
-# No external runtime dependencies are required.
+# Runtime dependencies are deliberately pinned for reproducible container builds.
+Flask==3.1.3
+gunicorn==26.0.0

@@ -4,9 +4,14 @@ on:
   pull_request:
     branches: [main]
     paths:
+      - ".dockerignore"
       - ".github/workflows/release.yml"
+      - "convert.py"
+      - "docker/**"
+      - "packages/**"
       - "pyproject.toml"
       - "requirements*.txt"
+      - "scripts/container-smoke.sh"
       - "scripts/validate.sh"
   push:
     tags:
@@ -151,6 +156,11 @@ jobs:
             git check-ref-format "refs/tags/$tag_name"
           }
 
+          validate_image_tag() {
+            local tag_name="$1"
+            [[ "$tag_name" =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$ ]]
+          }
+
           if [[ "$EVENT_NAME" == "pull_request" ]]; then
             tag="validation-only"
             requested_target="$PR_HEAD_SHA"
@@ -207,7 +217,10 @@ jobs:
             update_latest_tag="$(bool_or_default "${UPDATE_LATEST_TAG:-$update_latest_tag}" "true")"
           fi
 
-          if [[ "$prerelease" != "true" ]]; then
+          if [[ "$prerelease" == "true" ]]; then
+            update_stable_tag="false"
+            update_latest_tag="false"
+          else
             update_prerelease_tag="false"
           fi
 
@@ -216,7 +229,26 @@ jobs:
               echo "Invalid tag name '$tag_name'." >&2
               exit 1
             fi
+            if ! validate_image_tag "$tag_name"; then
+              echo "Tag '$tag_name' is not valid for a container image." >&2
+              exit 1
+            fi
           done
+
+          for channel_tag in "$prerelease_tag" "$stable_tag" "$latest_tag"; do
+            if [[ "$channel_tag" == "$tag" || \
+                  "$channel_tag" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.-]+)?$ || \
+                  "$channel_tag" =~ ^sha-[0-9a-f]{7,64}$ ]]; then
+              echo "Floating channel '$channel_tag' must not be an immutable image tag." >&2
+              exit 1
+            fi
+          done
+          if [[ "$prerelease_tag" == "$stable_tag" || \
+                "$prerelease_tag" == "$latest_tag" || \
+                "$stable_tag" == "$latest_tag" ]]; then
+            echo "Floating channel tag names must be distinct." >&2
+            exit 1
+          fi
 
           if ! target_sha="$(resolve_commitish "$requested_target")"; then
             echo "Invalid target_commitish '$requested_target'." >&2
@@ -322,8 +354,8 @@ jobs:
             echo "- Result: **$VALIDATION_RESULT**"
           } >> "$GITHUB_STEP_SUMMARY"
 
-  publish:
-    name: Publish validated release
+  tag:
+    name: Create immutable release tag
     if: github.event_name != 'pull_request'
     needs:
       - resolve
@@ -356,13 +388,23 @@ jobs:
             exit 1
           }
 
-          if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
+          remote_sha="$(git ls-remote --tags origin "refs/tags/${TARGET_TAG}^{}" | awk '{print $1}')"
+          if [[ -z "$remote_sha" ]]; then
+            remote_sha="$(git ls-remote --tags origin "refs/tags/${TARGET_TAG}" | awk '{print $1}')"
+          fi
+
+          if [[ -n "$remote_sha" && "$remote_sha" != "$TARGET_SHA" ]]; then
+            echo "Release tag $TARGET_TAG already points to $remote_sha, expected $TARGET_SHA." >&2
+            exit 1
+          fi
+
+          if [[ "$EVENT_NAME" == "workflow_dispatch" && -z "$remote_sha" ]]; then
             git config user.name "github-actions[bot]"
             git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git tag -f -a -m "Release $TARGET_TAG ($TARGET_SHA)" \
+            git tag -a -m "Release $TARGET_TAG ($TARGET_SHA)" \
               -- "$TARGET_TAG" "$TARGET_SHA"
             push_remote="https://x-access-token:${PUSH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
-            git push "$push_remote" "refs/tags/$TARGET_TAG" --force
+            git push "$push_remote" "refs/tags/$TARGET_TAG"
           fi
 
           remote_sha="$(git ls-remote --tags origin "refs/tags/${TARGET_TAG}^{}" | awk '{print $1}')"
@@ -373,6 +415,216 @@ jobs:
             echo "Release tag $TARGET_TAG points to $remote_sha, expected $TARGET_SHA." >&2
             exit 1
           }
+
+  container:
+    name: Publish validated container
+    if: github.event_name != 'pull_request'
+    needs:
+      - resolve
+      - validate
+      - tag
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    concurrency:
+      group: container-release-${{ needs.resolve.outputs.tag }}
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    env:
+      IMAGE_NAME: ghcr.io/greyinghair/screenos_to_junos_converter
+    outputs:
+      image_digest: ${{ steps.publish.outputs.digest }}
+
+    steps:
+      - name: Checkout tested commit
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.resolve.outputs.target_sha }}
+          persist-credentials: false
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Generate release image metadata
+        id: metadata
+        uses: docker/metadata-action@v6
+        with:
+          images: ${{ env.IMAGE_NAME }}
+          labels: |
+            org.opencontainers.image.revision=${{ needs.resolve.outputs.target_sha }}
+            org.opencontainers.image.version=${{ needs.resolve.outputs.tag }}
+
+      - name: Build exact local release candidate
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: docker/Dockerfile
+          load: true
+          push: false
+          no-cache: true
+          tags: screenos-to-junos:release-candidate
+          labels: ${{ steps.metadata.outputs.labels }}
+          build-args: |
+            APP_VERSION=${{ needs.resolve.outputs.tag }}
+
+      - name: Validate CLI and web runtime before publication
+        run: scripts/container-smoke.sh screenos-to-junos:release-candidate
+
+      - name: Log in to the GitHub Container Registry
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - name: Publish the tested image without replacing immutable tags
+        id: publish
+        env:
+          TARGET_SHA: ${{ needs.resolve.outputs.target_sha }}
+          TARGET_TAG: ${{ needs.resolve.outputs.tag }}
+        run: |
+          set -euo pipefail
+
+          set +e
+          pull_output="$(docker pull "$IMAGE_NAME:$TARGET_TAG" 2>&1)"
+          pull_status=$?
+          set -e
+
+          if [[ "$pull_status" -eq 0 ]]; then
+            existing_revision="$(docker image inspect \
+              --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' \
+              "$IMAGE_NAME:$TARGET_TAG")"
+            [[ "$existing_revision" == "$TARGET_SHA" ]] || {
+              echo "Immutable image tag $TARGET_TAG belongs to $existing_revision, not $TARGET_SHA." >&2
+              exit 1
+            }
+            created="false"
+          else
+            if ! grep -Eqi 'manifest unknown|not found' <<< "$pull_output"; then
+              echo "$pull_output" >&2
+              echo "Could not safely determine whether $IMAGE_NAME:$TARGET_TAG exists." >&2
+              exit 1
+            fi
+            docker tag screenos-to-junos:release-candidate "$IMAGE_NAME:$TARGET_TAG"
+            docker push "$IMAGE_NAME:$TARGET_TAG"
+            created="true"
+          fi
+
+          digest="$(docker buildx imagetools inspect "$IMAGE_NAME:$TARGET_TAG" \
+            | awk '$1 == "Digest:" {print $2; exit}')"
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]] || {
+            echo "Could not resolve the published image digest." >&2
+            exit 1
+          }
+          echo "created=$created" >> "$GITHUB_OUTPUT"
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+
+      - name: Smoke test the exact registry digest
+        run: scripts/container-smoke.sh ${{ env.IMAGE_NAME }}@${{ steps.publish.outputs.digest }}
+
+      - name: Apply immutable SHA alias
+        env:
+          IMAGE_DIGEST: ${{ steps.publish.outputs.digest }}
+          TARGET_SHA: ${{ needs.resolve.outputs.target_sha }}
+        run: |
+          set -euo pipefail
+
+          remote_digest() {
+            local image_ref="$1"
+            local inspect_output
+            local inspect_status
+            set +e
+            inspect_output="$(docker buildx imagetools inspect "$image_ref" 2>&1)"
+            inspect_status=$?
+            set -e
+            if [[ "$inspect_status" -eq 0 ]]; then
+              awk '$1 == "Digest:" {print $2; exit}' <<< "$inspect_output"
+            elif grep -Eqi 'manifest unknown|not found' <<< "$inspect_output"; then
+              return 0
+            else
+              echo "$inspect_output" >&2
+              return "$inspect_status"
+            fi
+          }
+
+          ensure_immutable_alias() {
+            local image_ref="$1"
+            local existing_digest
+            existing_digest="$(remote_digest "$image_ref")"
+            if [[ -n "$existing_digest" && "$existing_digest" != "$IMAGE_DIGEST" ]]; then
+              echo "Immutable image tag $image_ref already points to $existing_digest." >&2
+              exit 1
+            fi
+            if [[ -z "$existing_digest" ]]; then
+              docker buildx imagetools create \
+                --prefer-index=false \
+                --tag "$image_ref" "$IMAGE_NAME@$IMAGE_DIGEST"
+            fi
+          }
+
+          ensure_immutable_alias "$IMAGE_NAME:sha-$TARGET_SHA"
+
+      - name: Generate an SPDX SBOM from the published image
+        uses: anchore/sbom-action@v0.24.0
+        with:
+          image: ${{ env.IMAGE_NAME }}@${{ steps.publish.outputs.digest }}
+          format: spdx-json
+          output-file: container-sbom.spdx.json
+          upload-artifact: false
+          upload-release-assets: false
+
+      - name: Attest published image provenance
+        uses: actions/attest@v4
+        with:
+          subject-name: ${{ env.IMAGE_NAME }}
+          subject-digest: ${{ steps.publish.outputs.digest }}
+          push-to-registry: true
+
+      - name: Attest published image SBOM
+        uses: actions/attest@v4
+        with:
+          subject-name: ${{ env.IMAGE_NAME }}
+          subject-digest: ${{ steps.publish.outputs.digest }}
+          sbom-path: container-sbom.spdx.json
+          push-to-registry: true
+
+      - name: Record published container
+        env:
+          IMAGE_DIGEST: ${{ steps.publish.outputs.digest }}
+          IMAGE_CREATED: ${{ steps.publish.outputs.created }}
+          TARGET_TAG: ${{ needs.resolve.outputs.tag }}
+        run: |
+          {
+            echo "## Published container"
+            echo
+            echo "- Image: \`$IMAGE_NAME:$TARGET_TAG\`"
+            echo "- Digest: \`$IMAGE_DIGEST\`"
+            echo "- New immutable image: \`$IMAGE_CREATED\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  publish:
+    name: Publish validated GitHub release
+    if: github.event_name != 'pull_request'
+    needs:
+      - resolve
+      - validate
+      - tag
+      - container
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout tested commit
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.resolve.outputs.target_sha }}
+          fetch-depth: 0
+          persist-credentials: false
 
       - name: Create or update GitHub release
         uses: softprops/action-gh-release@v3
@@ -385,11 +637,61 @@ jobs:
           prerelease: ${{ needs.resolve.outputs.prerelease }}
           make_latest: ${{ needs.resolve.outputs.make_latest }}
 
-      - name: Move floating tags to the tested SHA
-        if: ${{ needs.resolve.outputs.update_stable_tag == 'true' || needs.resolve.outputs.update_prerelease_tag == 'true' || needs.resolve.outputs.update_latest_tag == 'true' }}
+      - name: Record published commit
         env:
-          PUSH_TOKEN: ${{ secrets.RELEASE_TAG_PUSH_TOKEN != '' && secrets.RELEASE_TAG_PUSH_TOKEN || github.token }}
+          REQUESTED_TARGET: ${{ needs.resolve.outputs.requested_target }}
           TARGET_SHA: ${{ needs.resolve.outputs.target_sha }}
+          TARGET_TAG: ${{ needs.resolve.outputs.tag }}
+        run: |
+          {
+            echo "## Published release"
+            echo
+            echo "- Requested target: \`$REQUESTED_TARGET\`"
+            echo "- Validated and published SHA: \`$TARGET_SHA\`"
+            echo "- Version tag: \`$TARGET_TAG\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  channels:
+    name: Move serialized release channels
+    if: ${{ github.event_name != 'pull_request' && (needs.resolve.outputs.update_stable_tag == 'true' || needs.resolve.outputs.update_prerelease_tag == 'true' || needs.resolve.outputs.update_latest_tag == 'true') }}
+    needs:
+      - resolve
+      - container
+      - publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    concurrency:
+      group: release-channel-publication
+      cancel-in-progress: false
+      queue: max
+    permissions:
+      contents: write
+      packages: write
+    env:
+      IMAGE_NAME: ghcr.io/greyinghair/screenos_to_junos_converter
+
+    steps:
+      - name: Checkout tested commit
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.resolve.outputs.target_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Log in to the GitHub Container Registry
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - name: Move requested container channels
+        id: container_channels
+        env:
+          IMAGE_DIGEST: ${{ needs.container.outputs.image_digest }}
           TARGET_TAG: ${{ needs.resolve.outputs.tag }}
           PRERELEASE_TAG: ${{ needs.resolve.outputs.prerelease_tag }}
           STABLE_TAG: ${{ needs.resolve.outputs.stable_tag }}
@@ -400,13 +702,93 @@ jobs:
         run: |
           set -euo pipefail
 
+          should_promote() {
+            local channel_tag="$1"
+            local pull_output
+            local pull_status
+            local current_version
+            local newest_version
+
+            set +e
+            pull_output="$(docker pull "$IMAGE_NAME:$channel_tag" 2>&1)"
+            pull_status=$?
+            set -e
+            if [[ "$pull_status" -ne 0 ]]; then
+              if grep -Eqi 'manifest unknown|not found' <<< "$pull_output"; then
+                return 0
+              fi
+              echo "$pull_output" >&2
+              return "$pull_status"
+            fi
+
+            current_version="$(docker image inspect \
+              --format '{{ index .Config.Labels "org.opencontainers.image.version" }}' \
+              "$IMAGE_NAME:$channel_tag")"
+            [[ "$current_version" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.-]+)?$ ]] || {
+              echo "Channel $channel_tag has invalid version metadata '$current_version'." >&2
+              return 2
+            }
+            [[ "$current_version" == "$TARGET_TAG" ]] && return 0
+            newest_version="$(printf '%s\n%s\n' "$current_version" "$TARGET_TAG" \
+              | sort -V | tail -n 1)"
+            if [[ "$newest_version" != "$TARGET_TAG" ]]; then
+              echo "Leaving $channel_tag at newer version $current_version; $TARGET_TAG is stale."
+              return 1
+            fi
+          }
+
+          move_channel() {
+            docker buildx imagetools create \
+              --prefer-index=false \
+              --tag "$IMAGE_NAME:$1" "$IMAGE_NAME@$IMAGE_DIGEST"
+          }
+
+          consider_channel() {
+            local requested="$1"
+            local channel_tag="$2"
+            local output_name="$3"
+            local promoted="false"
+            local promotion_status=1
+            if [[ "$requested" == "true" ]]; then
+              if should_promote "$channel_tag"; then
+                promotion_status=0
+              else
+                promotion_status=$?
+              fi
+              if [[ "$promotion_status" -eq 0 ]]; then
+                move_channel "$channel_tag"
+                promoted="true"
+              elif [[ "$promotion_status" -ne 1 ]]; then
+                return "$promotion_status"
+              fi
+            fi
+            echo "$output_name=$promoted" >> "$GITHUB_OUTPUT"
+          }
+
+          consider_channel "$UPDATE_STABLE_TAG" "$STABLE_TAG" stable
+          consider_channel "$UPDATE_PRERELEASE_TAG" "$PRERELEASE_TAG" prerelease
+          consider_channel "$UPDATE_LATEST_TAG" "$LATEST_TAG" latest
+
+      - name: Move requested Git channels
+        env:
+          PUSH_TOKEN: ${{ secrets.RELEASE_TAG_PUSH_TOKEN != '' && secrets.RELEASE_TAG_PUSH_TOKEN || github.token }}
+          TARGET_SHA: ${{ needs.resolve.outputs.target_sha }}
+          TARGET_TAG: ${{ needs.resolve.outputs.tag }}
+          PRERELEASE_TAG: ${{ needs.resolve.outputs.prerelease_tag }}
+          STABLE_TAG: ${{ needs.resolve.outputs.stable_tag }}
+          LATEST_TAG: ${{ needs.resolve.outputs.latest_tag }}
+          UPDATE_STABLE_TAG: ${{ steps.container_channels.outputs.stable }}
+          UPDATE_PRERELEASE_TAG: ${{ steps.container_channels.outputs.prerelease }}
+          UPDATE_LATEST_TAG: ${{ steps.container_channels.outputs.latest }}
+        run: |
+          set -euo pipefail
+
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           push_remote="https://x-access-token:${PUSH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
 
           move_tag() {
             local floating_tag="$1"
-            [[ -n "$floating_tag" ]] || return 0
             git tag -f -a \
               -m "Move $floating_tag -> $TARGET_TAG ($TARGET_SHA)" \
               -- "$floating_tag" "$TARGET_SHA"
@@ -423,60 +805,43 @@ jobs:
             move_tag "$LATEST_TAG"
           fi
 
-      - name: Verify every published tag target
+      - name: Verify every requested channel
         env:
+          IMAGE_DIGEST: ${{ needs.container.outputs.image_digest }}
           TARGET_SHA: ${{ needs.resolve.outputs.target_sha }}
-          TARGET_TAG: ${{ needs.resolve.outputs.tag }}
           PRERELEASE_TAG: ${{ needs.resolve.outputs.prerelease_tag }}
           STABLE_TAG: ${{ needs.resolve.outputs.stable_tag }}
           LATEST_TAG: ${{ needs.resolve.outputs.latest_tag }}
-          UPDATE_STABLE_TAG: ${{ needs.resolve.outputs.update_stable_tag }}
-          UPDATE_PRERELEASE_TAG: ${{ needs.resolve.outputs.update_prerelease_tag }}
-          UPDATE_LATEST_TAG: ${{ needs.resolve.outputs.update_latest_tag }}
+          UPDATE_STABLE_TAG: ${{ steps.container_channels.outputs.stable }}
+          UPDATE_PRERELEASE_TAG: ${{ steps.container_channels.outputs.prerelease }}
+          UPDATE_LATEST_TAG: ${{ steps.container_channels.outputs.latest }}
         run: |
           set -euo pipefail
 
-          resolve_remote_tag_sha() {
-            local tag_name="$1"
-            local resolved=""
-            resolved="$(git ls-remote --tags origin "refs/tags/${tag_name}^{}" | awk '{print $1}')"
-            if [[ -z "$resolved" ]]; then
-              resolved="$(git ls-remote --tags origin "refs/tags/${tag_name}" | awk '{print $1}')"
-            fi
-            echo "$resolved"
-          }
-
-          verify_tag() {
-            local tag_name="$1"
-            local actual_sha
-            actual_sha="$(resolve_remote_tag_sha "$tag_name")"
-            [[ "$actual_sha" == "$TARGET_SHA" ]] || {
-              echo "Tag $tag_name points to $actual_sha, expected $TARGET_SHA." >&2
+          verify_channel() {
+            local channel_tag="$1"
+            local image_digest
+            local git_sha
+            image_digest="$(docker buildx imagetools inspect "$IMAGE_NAME:$channel_tag" \
+              | awk '$1 == "Digest:" {print $2; exit}')"
+            git_sha="$(git ls-remote --tags origin "refs/tags/${channel_tag}^{}" \
+              | awk '{print $1}')"
+            [[ "$image_digest" == "$IMAGE_DIGEST" ]] || {
+              echo "Image channel $channel_tag points to $image_digest, expected $IMAGE_DIGEST." >&2
+              exit 1
+            }
+            [[ "$git_sha" == "$TARGET_SHA" ]] || {
+              echo "Git channel $channel_tag points to $git_sha, expected $TARGET_SHA." >&2
               exit 1
             }
           }
 
-          verify_tag "$TARGET_TAG"
           if [[ "$UPDATE_STABLE_TAG" == "true" ]]; then
-            verify_tag "$STABLE_TAG"
+            verify_channel "$STABLE_TAG"
           fi
           if [[ "$UPDATE_PRERELEASE_TAG" == "true" ]]; then
-            verify_tag "$PRERELEASE_TAG"
+            verify_channel "$PRERELEASE_TAG"
           fi
           if [[ "$UPDATE_LATEST_TAG" == "true" ]]; then
-            verify_tag "$LATEST_TAG"
+            verify_channel "$LATEST_TAG"
           fi
-
-      - name: Record published commit
-        env:
-          REQUESTED_TARGET: ${{ needs.resolve.outputs.requested_target }}
-          TARGET_SHA: ${{ needs.resolve.outputs.target_sha }}
-          TARGET_TAG: ${{ needs.resolve.outputs.tag }}
-        run: |
-          {
-            echo "## Published release"
-            echo
-            echo "- Requested target: \`$REQUESTED_TARGET\`"
-            echo "- Validated and published SHA: \`$TARGET_SHA\`"
-            echo "- Version tag: \`$TARGET_TAG\`"
-          } >> "$GITHUB_STEP_SUMMARY"

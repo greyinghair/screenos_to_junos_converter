@@ -108,6 +108,12 @@ def test_dependency_constraints_pin_both_supported_boundaries() -> None:
         )
 
 
+def test_runtime_dependencies_are_exactly_pinned() -> None:
+    runtime = parse_pinned_requirements(read_repo_file("requirements.txt"))
+
+    assert runtime.keys() == {"Flask", "gunicorn"}
+
+
 def test_readme_unsupported_issues_match_the_support_matrix() -> None:
     readme = read_repo_file("readme.md")
     support_matrix = read_repo_file("docs/conversion-support-matrix.md")
@@ -131,12 +137,94 @@ def test_release_publishes_only_after_validating_the_resolved_sha() -> None:
     workflow = read_repo_file(".github/workflows/release.yml")
 
     validate_job = workflow.index("\n  validate:")
+    tag_job = workflow.index("\n  tag:")
+    container_job = workflow.index("\n  container:")
     publish_job = workflow.index("\n  publish:")
+    channels_job = workflow.index("\n  channels:")
 
-    assert validate_job < publish_job
+    assert validate_job < tag_job < container_job < publish_job < channels_job
     assert "target_sha: ${{ steps.meta.outputs.target_sha }}" in workflow
     assert "ref: ${{ needs.resolve.outputs.target_sha }}" in workflow
     assert "../validation-contract/scripts/validate.sh all" in workflow
-    assert "if: github.event_name != 'pull_request'" in workflow
-    assert "contents: write" not in workflow[:publish_job]
+    assert workflow.count("if: github.event_name != 'pull_request'") == 3
+    assert "contents: write" not in workflow[:tag_job]
+    assert "git tag -f" not in workflow[tag_job:container_job]
+    assert "packages: write" in workflow[container_job:publish_job]
+    assert "push: false" in workflow[container_job:publish_job]
+    assert "scripts/container-smoke.sh" in workflow[container_job:publish_job]
+    assert (
+        'docker push "$IMAGE_NAME:$TARGET_TAG"' in workflow[container_job:publish_job]
+    )
+    assert "ensure_immutable_alias" in workflow[container_job:publish_job]
+    assert workflow[container_job:publish_job].count("--prefer-index=false") == 1
+    assert workflow.count("--prefer-index=false") == 2
+    assert "anchore/sbom-action@v0.24.0" in workflow[container_job:publish_job]
+    assert workflow[container_job:publish_job].count("actions/attest@v4") == 2
+    assert "sbom-path: container-sbom.spdx.json" in workflow[container_job:publish_job]
     assert "contents: write" in workflow[publish_job:]
+
+
+def test_release_guards_immutable_and_prerelease_channel_tags() -> None:
+    workflow = read_repo_file(".github/workflows/release.yml")
+
+    assert 'update_stable_tag="false"' in workflow
+    assert 'update_latest_tag="false"' in workflow
+    assert (
+        "Floating channel '$channel_tag' must not be an immutable image tag."
+        in workflow
+    )
+    assert "^sha-[0-9a-f]{7,64}$" in workflow
+    assert "^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$" in workflow
+    assert "is not valid for a container image" in workflow
+    assert "Floating channel tag names must be distinct." in workflow
+    assert "container-release-${{ needs.resolve.outputs.tag }}" in workflow
+    assert "group: release-channel-publication" in workflow
+    assert "queue: max" in workflow
+    assert workflow.index("group: release-channel-publication") > workflow.index(
+        "\n  channels:"
+    )
+    assert "should_promote" in workflow
+    assert "sort -V" in workflow
+    assert "is stale" in workflow
+    assert "steps.container_channels.outputs.stable" in workflow
+    assert "Immutable image tag $TARGET_TAG belongs to" in workflow
+    assert "Immutable image tag $image_ref already points to" in workflow
+    local_smoke = workflow.index(
+        "scripts/container-smoke.sh screenos-to-junos:release-candidate"
+    )
+    registry_login = workflow.index("docker/login-action@v4", local_smoke)
+    version_push = workflow.index('docker push "$IMAGE_NAME:$TARGET_TAG"')
+    digest_smoke = workflow.index("Smoke test the exact registry digest")
+    assert local_smoke < registry_login < version_push < digest_smoke
+
+
+def test_pr_container_validation_cannot_publish_and_runs_runtime_smoke() -> None:
+    workflow = read_repo_file(".github/workflows/container.yml")
+
+    assert "pull_request:" in workflow
+    assert "permissions:\n  contents: read" in workflow
+    assert "packages: write" not in workflow
+    assert "docker/login-action" not in workflow
+    assert "push: false" in workflow
+    assert "no-cache: true" in workflow
+    assert "scripts/container-smoke.sh" in workflow
+    for path in ("docker/**", "packages/**", "requirements.txt"):
+        assert f'      - "{path}"' in workflow
+
+
+def test_container_runtime_is_non_root_pinned_and_health_checked() -> None:
+    dockerfile = read_repo_file("docker/Dockerfile")
+    smoke = read_repo_file("scripts/container-smoke.sh")
+
+    assert re.search(
+        r"^FROM python:[^\n]+@sha256:[0-9a-f]{64}$", dockerfile, re.MULTILINE
+    )
+    assert "USER 10001:10001" in dockerfile
+    assert 'ENTRYPOINT ["gunicorn"]' in dockerfile
+    assert '"--no-control-socket"' in dockerfile
+    assert "HEALTHCHECK" in dockerfile
+    assert "/healthz" in dockerfile
+    assert "--read-only" in smoke
+    assert "--cap-drop ALL" in smoke
+    assert "convert.py --help" in smoke
+    assert "/convert" in smoke

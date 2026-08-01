@@ -7,6 +7,7 @@ import logging
 import re
 import shlex
 from collections import Counter
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Final
@@ -274,53 +275,63 @@ class Converter:
         )
 
     def read_file(self, input_path: Path) -> None:
+        with input_path.open("r", encoding="utf-8", errors="replace") as input_file:
+            self.read_lines(input_file)
+
+    def read_text(self, source_text: str) -> None:
+        """Convert an in-memory ScreenOS configuration without temporary files."""
+
+        self.read_lines(source_text.splitlines())
+
+    def read_lines(self, source_lines: Iterable[str]) -> None:
+        """Convert one request-scoped iterable of ScreenOS configuration lines."""
+
         self.combine_dicts("service")
         self.combine_dicts("address")
 
         for line in MISSING_CONFIG_LINES:
             self.convert_config(line)
 
-        with input_path.open("r", encoding="utf-8", errors="replace") as input_file:
-            for linecount, raw_line in enumerate(input_file, start=1):
-                line = raw_line.rstrip("\n")
+        for linecount, raw_line in enumerate(source_lines, start=1):
+            line = raw_line.rstrip("\n")
 
-                if linecount % self.progress_interval == 0:
-                    LOGGER.info("Parsing line %s", linecount)
+            if linecount % self.progress_interval == 0:
+                LOGGER.info("Parsing line %s", linecount)
 
-                if RE_MULTI_DST.search(line):
-                    self.multi_line_rule(line, "destination-address", linecount)
-                elif RE_MULTI_SRC.search(line):
-                    self.multi_line_rule(line, "source-address", linecount)
-                elif RE_MULTI_SVC.search(line):
-                    self.multi_line_rule(line, "application", linecount)
-                elif RE_ATTACK.search(line):
-                    self.parse_idp_continuation(line, linecount)
-                elif RE_POLICY.search(line):
-                    self.parse_policy_line(line, linecount)
+            if RE_MULTI_DST.search(line):
+                self.multi_line_rule(line, "destination-address", linecount)
+            elif RE_MULTI_SRC.search(line):
+                self.multi_line_rule(line, "source-address", linecount)
+            elif RE_MULTI_SVC.search(line):
+                self.multi_line_rule(line, "application", linecount)
+            elif RE_ATTACK.search(line):
+                self.parse_idp_continuation(line, linecount)
+            elif RE_POLICY.search(line):
+                self.parse_policy_line(line, linecount)
+            else:
+                self.state.current_policy = None
+                if RE_INTERFACE.search(line):
+                    self.parse_interface_line(line, linecount)
+                elif RE_VROUTER.search(line):
+                    self.parse_vrouter_line(line, linecount)
+                elif RE_IKE.search(line):
+                    self.parse_ike_line(line, linecount)
+                elif RE_VPN.search(line):
+                    self.parse_vpn_line(line, linecount)
+                elif is_supported_service_definition(line):
+                    self._parse_service_line(line, linecount)
+                elif RE_GROUP_SERVICE.search(line):
+                    self.create_app_set(line, linecount)
+                elif RE_ADDRESS_LINE.search(line):
+                    self.create_address_book(line, linecount)
+                elif RE_GROUP_ADDRESS.search(line):
+                    self.create_address_set(line, linecount)
                 else:
-                    self.state.current_policy = None
-                    if RE_INTERFACE.search(line):
-                        self.parse_interface_line(line, linecount)
-                    elif RE_VROUTER.search(line):
-                        self.parse_vrouter_line(line, linecount)
-                    elif RE_IKE.search(line):
-                        self.parse_ike_line(line, linecount)
-                    elif RE_VPN.search(line):
-                        self.parse_vpn_line(line, linecount)
-                    elif is_supported_service_definition(line):
-                        self._parse_service_line(line, linecount)
-                    elif RE_GROUP_SERVICE.search(line):
-                        self.create_app_set(line, linecount)
-                    elif RE_ADDRESS_LINE.search(line):
-                        self.create_address_book(line, linecount)
-                    elif RE_GROUP_ADDRESS.search(line):
-                        self.create_address_set(line, linecount)
-                    else:
-                        self.record_failure(
-                            line,
-                            "unsupported or unrecognized syntax",
-                            linecount,
-                        )
+                    self.record_failure(
+                        line,
+                        "unsupported or unrecognized syntax",
+                        linecount,
+                    )
 
         self.render_interfaces()
         self.render_vpns()
