@@ -35,6 +35,7 @@ trap 'rm -f "$TREE_BLOCK_FILE" "$OUTPUT_FILE"' EXIT
   [ -f requirements-dev-minimum.txt ] && echo '|-- requirements-dev-minimum.txt        # Exact supported dependency floors'
   [ -f requirements-dev-latest.txt ] && echo '|-- requirements-dev-latest.txt         # Exact latest-compatible dependencies'
   [ -f pyproject.toml ] && echo '|-- pyproject.toml                       # Ruff, coverage, and pytest configuration'
+  [ -f .dockerignore ] && echo '|-- .dockerignore                       # Reproducible container build exclusions'
   if [ -d input ]; then
     echo '|-- input/                              # Source ScreenOS configs to convert'
     [ -f input/netscreen_config.txt ] && echo '|   `-- netscreen_config.txt            # Default converter input file'
@@ -63,7 +64,11 @@ trap 'rm -f "$TREE_BLOCK_FILE" "$OUTPUT_FILE"' EXIT
     [ -f packages/__init__.py ] && echo '|   |-- __init__.py                     # Explicit package exports'
     [ -f packages/converter_core.py ] && echo '|   |-- converter_core.py               # Core conversion engine and state'
     [ -f packages/conversion_models.py ] && echo '|   |-- conversion_models.py            # Normalized interface, policy, routing, and NAT models'
+    [ -f packages/conversion_service.py ] && echo '|   |-- conversion_service.py           # Request-scoped in-memory conversion API'
     [ -f packages/convert_service.py ] && echo '|   |-- convert_service.py              # Service conversion helpers'
+    [ -f packages/web_app.py ] && echo '|   |-- web_app.py                      # Flask application factory and routes'
+    [ -d packages/static ] && echo '|   |-- static/                         # Web application styles and behavior'
+    [ -d packages/templates ] && echo '|   |-- templates/                      # Web application HTML templates'
     [ -f packages/sanity_check_naming.py ] && echo '|   |-- sanity_check_naming.py          # Name normalization for Junos compatibility'
     [ -f packages/ipy.py ] && echo '|   `-- ipy.py                          # Local IP/network parsing utility'
   fi
@@ -73,11 +78,13 @@ trap 'rm -f "$TREE_BLOCK_FILE" "$OUTPUT_FILE"' EXIT
     [ -f tests/conftest.py ] && echo '|   |-- conftest.py                     # Shared pytest fixtures'
     [ -f tests/test_automation_contracts.py ] && echo '|   |-- test_automation_contracts.py    # CI, dependency, and release contracts'
     [ -f tests/test_cli.py ] && echo '|   |-- test_cli.py                     # CLI path and diagnostics tests'
+    [ -f tests/test_conversion_service.py ] && echo '|   |-- test_conversion_service.py      # In-memory service and isolation tests'
     [ -f tests/test_converter_smoke.py ] && echo '|   |-- test_converter_smoke.py         # End-to-end smoke test'
     [ -f tests/test_converter_syntax_coverage.py ] && echo '|   |-- test_converter_syntax_coverage.py # Supported grammar tests'
     [ -f tests/test_policy_interface_models.py ] && echo '|   |-- test_policy_interface_models.py # Interface mapping and shared policy model tests'
     [ -f tests/test_routing_nat_models.py ] && echo '|   |-- test_routing_nat_models.py      # Routing and NAT model/reference tests'
     [ -f tests/test_validation_fixtures.py ] && echo '|   |-- test_validation_fixtures.py     # Fixture validation harness'
+    [ -f tests/test_web_app.py ] && echo '|   |-- test_web_app.py                 # Flask request and security tests'
     [ -d tests/fixtures ] && echo '|   |-- fixtures/                       # Sanitized conversion fixtures'
     [ -f tests/test_convert_service.py ] && echo '|   |-- test_convert_service.py         # Service parser unit tests'
     [ -f tests/test_sanity_check_naming.py ] && echo '|   `-- test_sanity_check_naming.py     # Naming helper unit tests'
@@ -85,6 +92,7 @@ trap 'rm -f "$TREE_BLOCK_FILE" "$OUTPUT_FILE"' EXIT
 
   if [ -d scripts ]; then
     echo '|-- scripts/                            # Local maintenance/helper scripts'
+    [ -f scripts/container-smoke.sh ] && echo '|   |-- container-smoke.sh              # Reusable CLI and web image smoke checks'
     [ -f scripts/session-close.sh ] && echo '|   |-- session-close.sh                # Appends dated session handoff template'
     [ -f scripts/update-readme-tree.sh ] && echo '|   |-- update-readme-tree.sh           # Regenerates this README tree section'
     [ -f scripts/validate.sh ] && echo '|   `-- validate.sh                     # Shared local, CI, and release validation'
@@ -96,6 +104,7 @@ trap 'rm -f "$TREE_BLOCK_FILE" "$OUTPUT_FILE"' EXIT
     if [ -d .github/workflows ]; then
       echo '    `-- workflows/                      # GitHub Actions workflows'
       [ -f .github/workflows/pr-validate.yml ] && echo '        |-- pr-validate.yml             # Required Python and quality CI'
+      [ -f .github/workflows/container.yml ] && echo '        |-- container.yml               # Non-publishing image build and smoke test'
       [ -f .github/workflows/prerelease-canary.yml ] && echo '        |-- prerelease-canary.yml       # Non-blocking Python/pytest canaries'
       [ -f .github/workflows/codeql-analysis.yml ] && echo '        |-- codeql-analysis.yml         # Security analysis workflow'
       [ -f .github/workflows/dependency-review.yml ] && echo '        |-- dependency-review.yml       # Vulnerable dependency gate'

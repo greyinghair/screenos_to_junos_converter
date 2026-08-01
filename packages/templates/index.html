@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>ScreenOS to Junos Converter</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+    <script src="{{ url_for('static', filename='app.js') }}" defer></script>
+  </head>
+  <body>
+    <main class="shell">
+      <header>
+        <p class="eyebrow">Migration utility</p>
+        <h1>ScreenOS to Junos Converter</h1>
+        <p>Paste a ScreenOS configuration or upload one UTF-8 <code>.txt</code> file.</p>
+      </header>
+
+      {% if error %}
+        <div class="notice error" role="alert">{{ error }}</div>
+      {% endif %}
+
+      <form action="{{ url_for('convert') }}" method="post" enctype="multipart/form-data">
+        <label for="config_text">Paste configuration</label>
+        <textarea id="config_text" name="config_text" rows="14" spellcheck="false"
+          placeholder='set address "Trust" "SERVER" 192.0.2.10 255.255.255.255'></textarea>
+
+        <div class="separator" aria-hidden="true">or</div>
+
+        <label for="config_file">Upload a text file</label>
+        <input id="config_file" name="config_file" type="file" accept=".txt,text/plain">
+        <p class="hint">Maximum configuration size: {{ max_config_bytes }} bytes.</p>
+
+        <div class="actions">
+          <button type="submit" name="action" value="preview">Convert and preview</button>
+          <button class="secondary" type="submit" name="action" value="download">
+            Convert and download
+          </button>
+        </div>
+      </form>
+
+      {% if result %}
+        <section class="result" aria-labelledby="result-heading">
+          <div class="result-header">
+            <div>
+              <p class="eyebrow">Conversion result</p>
+              <h2 id="result-heading">Generated Junos configuration</h2>
+            </div>
+            <button id="download-preview" class="secondary" type="button"
+              data-download-name="{{ download_name }}">Download preview</button>
+          </div>
+
+          <dl class="metrics">
+            <div><dt>Emitted lines</dt><dd>{{ result.converted_count }}</dd></div>
+            <div><dt>Unsupported lines</dt><dd>{{ result.unsupported_count }}</dd></div>
+          </dl>
+
+          {% if result.manual_review_warnings %}
+            <div class="notice warning">
+              <strong>Manual review required</strong>
+              <ul>
+                {% for warning in result.manual_review_warnings %}
+                  <li>{{ warning }}</li>
+                {% endfor %}
+              </ul>
+            </div>
+          {% endif %}
+
+          {% if result.diagnostics %}
+            <details>
+              <summary>Unsupported-line diagnostics ({{ result.unsupported_count }})</summary>
+              <ol>
+                {% for diagnostic in result.diagnostics %}
+                  <li>
+                    {% if diagnostic.line_number %}Line {{ diagnostic.line_number }}: {% endif %}
+                    {{ diagnostic.reason }}
+                  </li>
+                {% endfor %}
+              </ol>
+            </details>
+          {% endif %}
+
+          <label for="converted_output">Converted output</label>
+          <textarea id="converted_output" rows="20" readonly spellcheck="false">{{ result.output }}</textarea>
+        </section>
+      {% endif %}
+    </main>
+  </body>
+</html>

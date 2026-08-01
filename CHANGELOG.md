@@ -4,6 +4,10 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased
 
+- feat: add an in-memory conversion service and request-isolated Flask web UI.
+- feat: add safe paste/upload, preview, diagnostics, and download workflows.
+- ci: build and smoke-test containers on relevant pull requests without publishing.
+- ci: publish non-root Gunicorn images to GHCR with immutable tags, SBOM, and provenance.
 - fix: omit BGP authentication secrets from generated configuration and redact them from diagnostics.
 - feat: convert static routes, routing instances, and supported BGP peer groups.
 - feat: convert MIP static NAT, DIP pools, and policy-linked source NAT.

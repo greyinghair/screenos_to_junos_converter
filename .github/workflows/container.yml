@@ -1,0 +1,51 @@
+name: Container validation
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - ".dockerignore"
+      - ".github/workflows/container.yml"
+      - "convert.py"
+      - "docker/**"
+      - "packages/**"
+      - "requirements.txt"
+      - "scripts/container-smoke.sh"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: container-validation-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build_and_smoke:
+    name: Build and smoke test
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Build local validation image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: docker/Dockerfile
+          load: true
+          push: false
+          no-cache: true
+          tags: screenos-to-junos:validation-${{ github.sha }}
+          build-args: |
+            APP_VERSION=validation-${{ github.sha }}
+
+      - name: Validate CLI and web runtime
+        run: scripts/container-smoke.sh screenos-to-junos:validation-${{ github.sha }}

@@ -20,6 +20,12 @@ from .conversion_models import (
     StaticRouteModel,
     map_screenos_interface,
 )
+from .conversion_service import (
+    ConfigurationTooLarge,
+    ConversionInputError,
+    ConversionResult,
+    convert_configuration,
+)
 from .convert_service import convert_service_in_file
 from .converter_core import ConversionState, Converter
 from .sanity_check_naming import sanity_check_naming
@@ -29,6 +35,9 @@ __all__ = [
     "BgpOptions",
     "BgpPeerGroupModel",
     "BgpPeerModel",
+    "ConfigurationTooLarge",
+    "ConversionInputError",
+    "ConversionResult",
     "ConversionState",
     "Converter",
     "DipPoolModel",
@@ -44,6 +53,7 @@ __all__ = [
     "PolicyReference",
     "SourceNatRuleModel",
     "StaticRouteModel",
+    "convert_configuration",
     "convert_service_in_file",
     "map_screenos_interface",
     "sanity_check_naming",

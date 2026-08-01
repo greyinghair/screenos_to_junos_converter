@@ -7,6 +7,7 @@ import logging
 import re
 import shlex
 from collections import Counter
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Final
@@ -144,15 +145,32 @@ RE_VROUTER: Final[re.Pattern[str]] = re.compile(r"^set vrouter(?:\s|$)")
 RE_IKE: Final[re.Pattern[str]] = re.compile(r"^set ike(?:\s|$)")
 RE_VPN: Final[re.Pattern[str]] = re.compile(r"^set vpn(?:\s|$)")
 RE_ATTACK: Final[re.Pattern[str]] = re.compile(r"^set attack(?:\s|$)")
-RE_BGP_AUTHENTICATION: Final[re.Pattern[str]] = re.compile(
-    r"(\bmd5-authentication)(?:\s+.*)?$",
-    re.IGNORECASE,
-)
 RE_ADDRESS: Final[re.Pattern[str]] = re.compile(
     r'^set address\s+"(?P<zone>[^"]+)"\s+"(?P<name>[^"]+)"\s+'
     r"(?P<value>\S+)(?:\s+(?P<mask>\d{1,3}(?:\.\d{1,3}){3}))?"
     r'(?:\s+"[^"]*")?\s*$',
 )
+
+
+def _redact_bgp_authentication(line: str) -> str:
+    """Redact a BGP MD5 value with a bounded, non-backtracking scan."""
+
+    keyword = "md5-authentication"
+    lowered_line = line.lower()
+    search_start = 0
+    while True:
+        keyword_start = lowered_line.find(keyword, search_start)
+        if keyword_start < 0:
+            return line
+        keyword_end = keyword_start + len(keyword)
+        before_is_word = keyword_start > 0 and (
+            lowered_line[keyword_start - 1].isalnum()
+            or lowered_line[keyword_start - 1] == "_"
+        )
+        after_is_separator = keyword_end == len(line) or line[keyword_end].isspace()
+        if not before_is_word and after_is_separator:
+            return f"{line[:keyword_end]} <redacted>"
+        search_start = keyword_end
 
 
 @dataclass(frozen=True, slots=True)
@@ -274,53 +292,63 @@ class Converter:
         )
 
     def read_file(self, input_path: Path) -> None:
+        with input_path.open("r", encoding="utf-8", errors="replace") as input_file:
+            self.read_lines(input_file)
+
+    def read_text(self, source_text: str) -> None:
+        """Convert an in-memory ScreenOS configuration without temporary files."""
+
+        self.read_lines(source_text.splitlines())
+
+    def read_lines(self, source_lines: Iterable[str]) -> None:
+        """Convert one request-scoped iterable of ScreenOS configuration lines."""
+
         self.combine_dicts("service")
         self.combine_dicts("address")
 
         for line in MISSING_CONFIG_LINES:
             self.convert_config(line)
 
-        with input_path.open("r", encoding="utf-8", errors="replace") as input_file:
-            for linecount, raw_line in enumerate(input_file, start=1):
-                line = raw_line.rstrip("\n")
+        for linecount, raw_line in enumerate(source_lines, start=1):
+            line = raw_line.rstrip("\n")
 
-                if linecount % self.progress_interval == 0:
-                    LOGGER.info("Parsing line %s", linecount)
+            if linecount % self.progress_interval == 0:
+                LOGGER.info("Parsing line %s", linecount)
 
-                if RE_MULTI_DST.search(line):
-                    self.multi_line_rule(line, "destination-address", linecount)
-                elif RE_MULTI_SRC.search(line):
-                    self.multi_line_rule(line, "source-address", linecount)
-                elif RE_MULTI_SVC.search(line):
-                    self.multi_line_rule(line, "application", linecount)
-                elif RE_ATTACK.search(line):
-                    self.parse_idp_continuation(line, linecount)
-                elif RE_POLICY.search(line):
-                    self.parse_policy_line(line, linecount)
+            if RE_MULTI_DST.search(line):
+                self.multi_line_rule(line, "destination-address", linecount)
+            elif RE_MULTI_SRC.search(line):
+                self.multi_line_rule(line, "source-address", linecount)
+            elif RE_MULTI_SVC.search(line):
+                self.multi_line_rule(line, "application", linecount)
+            elif RE_ATTACK.search(line):
+                self.parse_idp_continuation(line, linecount)
+            elif RE_POLICY.search(line):
+                self.parse_policy_line(line, linecount)
+            else:
+                self.state.current_policy = None
+                if RE_INTERFACE.search(line):
+                    self.parse_interface_line(line, linecount)
+                elif RE_VROUTER.search(line):
+                    self.parse_vrouter_line(line, linecount)
+                elif RE_IKE.search(line):
+                    self.parse_ike_line(line, linecount)
+                elif RE_VPN.search(line):
+                    self.parse_vpn_line(line, linecount)
+                elif is_supported_service_definition(line):
+                    self._parse_service_line(line, linecount)
+                elif RE_GROUP_SERVICE.search(line):
+                    self.create_app_set(line, linecount)
+                elif RE_ADDRESS_LINE.search(line):
+                    self.create_address_book(line, linecount)
+                elif RE_GROUP_ADDRESS.search(line):
+                    self.create_address_set(line, linecount)
                 else:
-                    self.state.current_policy = None
-                    if RE_INTERFACE.search(line):
-                        self.parse_interface_line(line, linecount)
-                    elif RE_VROUTER.search(line):
-                        self.parse_vrouter_line(line, linecount)
-                    elif RE_IKE.search(line):
-                        self.parse_ike_line(line, linecount)
-                    elif RE_VPN.search(line):
-                        self.parse_vpn_line(line, linecount)
-                    elif is_supported_service_definition(line):
-                        self._parse_service_line(line, linecount)
-                    elif RE_GROUP_SERVICE.search(line):
-                        self.create_app_set(line, linecount)
-                    elif RE_ADDRESS_LINE.search(line):
-                        self.create_address_book(line, linecount)
-                    elif RE_GROUP_ADDRESS.search(line):
-                        self.create_address_set(line, linecount)
-                    else:
-                        self.record_failure(
-                            line,
-                            "unsupported or unrecognized syntax",
-                            linecount,
-                        )
+                    self.record_failure(
+                        line,
+                        "unsupported or unrecognized syntax",
+                        linecount,
+                    )
 
         self.render_interfaces()
         self.render_vpns()
@@ -1055,10 +1083,7 @@ class Converter:
         return sanity_check_naming(vrouter)
 
     def parse_vrouter_line(self, line: str, line_number: int) -> None:
-        diagnostic_line = RE_BGP_AUTHENTICATION.sub(
-            lambda match: f"{match.group(1)} <redacted>",
-            line,
-        )
+        diagnostic_line = _redact_bgp_authentication(line)
         try:
             tokens = shlex.split(line)
         except ValueError:
@@ -1256,10 +1281,7 @@ class Converter:
         line: str,
         line_number: int,
     ) -> None:
-        line = RE_BGP_AUTHENTICATION.sub(
-            lambda match: f"{match.group(1)} <redacted>",
-            line,
-        )
+        line = _redact_bgp_authentication(line)
         if not tokens:
             self.record_failure(line, "malformed BGP definition", line_number)
             return

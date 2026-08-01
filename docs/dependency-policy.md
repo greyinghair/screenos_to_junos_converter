@@ -18,6 +18,11 @@ floor changes only when the project intentionally adopts behavior unavailable
 in the old floor; a ceiling changes only after the next major line passes the
 full validation contract.
 
+Direct production dependencies in `requirements.txt` are exact pins. This
+keeps web and WSGI runtime resolution deterministic in the release container;
+Dependabot proposes reviewed updates to those pins and the digest-pinned base
+image.
+
 ## Prerelease canaries
 
 The scheduled `prerelease-canary.yml` workflow runs every Monday and can also be
@@ -69,6 +74,12 @@ and bounded by open-pull-request limits to keep review volume manageable.
 The release workflow resolves every requested branch, tag, or SHA to an
 immutable commit. It checks out that commit separately from the current
 validation contract, runs `scripts/validate.sh all`, and records the requested
-target and tested SHA in the workflow summary. Only the publishing job receives
-`contents: write`; it creates or moves release tags only after validation and
-verifies that every published tag resolves to the tested SHA.
+target and tested SHA in the workflow summary. Only the tag, GitHub Release,
+and serialized channel jobs receive `contents: write`; only the container and
+channel jobs receive `packages: write`. The immutable version tag is created without force after
+validation. A clean, non-publishing container candidate then passes CLI,
+health, and conversion smoke checks before that exact image is pushed. Existing
+version/SHA image tags are verified rather than replaced. The published digest
+is smoke-tested again, scanned for an SPDX SBOM, and given provenance and SBOM
+attestations. The final job publishes the GitHub Release and verifies every
+requested floating tag against the tested SHA.
