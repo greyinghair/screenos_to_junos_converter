@@ -125,6 +125,20 @@ def test_bgp_authentication_secret_is_omitted_and_redacted(tmp_path: Path) -> No
     )
 
 
+def test_bgp_authentication_redaction_handles_adversarial_spacing() -> None:
+    secret = "adversarial-spacing-secret"
+    source = (
+        "set vrouter trust-vr protocol bgp neighbor 198.51.100.1 "
+        f"md5-authentication{' ' * 200_000}{secret}"
+    )
+
+    converter = Converter(progress_interval=999_999)
+    converter.read_text(source)
+
+    assert secret not in repr(converter.state)
+    assert converter.state.diagnostics[0].line.endswith("md5-authentication <redacted>")
+
+
 def test_nat_models_preserve_precedence_and_policy_linkage() -> None:
     converter = Converter(progress_interval=9999)
     converter.read_file(FIXTURE_ROOT / "features" / "nat.screenos")

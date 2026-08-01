@@ -145,15 +145,32 @@ RE_VROUTER: Final[re.Pattern[str]] = re.compile(r"^set vrouter(?:\s|$)")
 RE_IKE: Final[re.Pattern[str]] = re.compile(r"^set ike(?:\s|$)")
 RE_VPN: Final[re.Pattern[str]] = re.compile(r"^set vpn(?:\s|$)")
 RE_ATTACK: Final[re.Pattern[str]] = re.compile(r"^set attack(?:\s|$)")
-RE_BGP_AUTHENTICATION: Final[re.Pattern[str]] = re.compile(
-    r"(\bmd5-authentication)(?:\s+.*)?$",
-    re.IGNORECASE,
-)
 RE_ADDRESS: Final[re.Pattern[str]] = re.compile(
     r'^set address\s+"(?P<zone>[^"]+)"\s+"(?P<name>[^"]+)"\s+'
     r"(?P<value>\S+)(?:\s+(?P<mask>\d{1,3}(?:\.\d{1,3}){3}))?"
     r'(?:\s+"[^"]*")?\s*$',
 )
+
+
+def _redact_bgp_authentication(line: str) -> str:
+    """Redact a BGP MD5 value with a bounded, non-backtracking scan."""
+
+    keyword = "md5-authentication"
+    lowered_line = line.lower()
+    search_start = 0
+    while True:
+        keyword_start = lowered_line.find(keyword, search_start)
+        if keyword_start < 0:
+            return line
+        keyword_end = keyword_start + len(keyword)
+        before_is_word = keyword_start > 0 and (
+            lowered_line[keyword_start - 1].isalnum()
+            or lowered_line[keyword_start - 1] == "_"
+        )
+        after_is_separator = keyword_end == len(line) or line[keyword_end].isspace()
+        if not before_is_word and after_is_separator:
+            return f"{line[:keyword_end]} <redacted>"
+        search_start = keyword_end
 
 
 @dataclass(frozen=True, slots=True)
@@ -1066,10 +1083,7 @@ class Converter:
         return sanity_check_naming(vrouter)
 
     def parse_vrouter_line(self, line: str, line_number: int) -> None:
-        diagnostic_line = RE_BGP_AUTHENTICATION.sub(
-            lambda match: f"{match.group(1)} <redacted>",
-            line,
-        )
+        diagnostic_line = _redact_bgp_authentication(line)
         try:
             tokens = shlex.split(line)
         except ValueError:
@@ -1267,10 +1281,7 @@ class Converter:
         line: str,
         line_number: int,
     ) -> None:
-        line = RE_BGP_AUTHENTICATION.sub(
-            lambda match: f"{match.group(1)} <redacted>",
-            line,
-        )
+        line = _redact_bgp_authentication(line)
         if not tokens:
             self.record_failure(line, "malformed BGP definition", line_number)
             return
