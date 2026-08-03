@@ -5,18 +5,22 @@ from __future__ import annotations
 import ipaddress
 import logging
 import re
+import secrets
 import shlex
+import string
 from collections import Counter
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Final
 
 from .conversion_models import (
+    AsPathFilterModel,
     BgpInstanceModel,
     BgpOptions,
     BgpPeerGroupModel,
     BgpPeerModel,
+    CommunityFilterModel,
     DipPoolModel,
     IdpRuleModel,
     IkeGatewayModel,
@@ -28,6 +32,10 @@ from .conversion_models import (
     MipModel,
     PolicyModel,
     PolicyReference,
+    PrefixFilterEntryModel,
+    PrefixFilterModel,
+    RoutePolicyModel,
+    RoutePolicyTermModel,
     SourceNatRuleModel,
     StaticRouteModel,
     map_screenos_interface,
@@ -37,6 +45,25 @@ from .ipy import IP
 from .sanity_check_naming import sanity_check_naming
 
 LOGGER = logging.getLogger(__name__)
+
+# Junos accepts an ASCII pre-shared key of up to 255 characters. This alphabet
+# avoids the shell and Junos quoting characters that would need escaping in a
+# generated "set" command.
+_PSK_ALPHABET: Final[str] = string.ascii_letters + string.digits
+_PSK_LENGTH: Final[int] = 32
+
+
+def generate_preshared_key(gateway_name: str) -> str:
+    """Return a fresh random pre-shared key for a converted IKE gateway.
+
+    The ScreenOS secret is never read, hashed, or otherwise used as input, so a
+    generated key cannot leak the original. The key is a placeholder: the tunnel
+    stays down until the same value is agreed and configured on the remote peer.
+    """
+
+    del gateway_name  # The key must not be derived from anything in the source.
+    return "".join(secrets.choice(_PSK_ALPHABET) for _ in range(_PSK_LENGTH))
+
 
 DEFAULT_APP_MAP: Final[dict[str, str]] = {
     "ANY": "any",
@@ -256,6 +283,18 @@ class ConversionState:
     rendered_vpns: set[str] = field(default_factory=set)
     rendered_idp_policies: set[tuple[str, str]] = field(default_factory=set)
     manual_review_warnings: list[str] = field(default_factory=list)
+    rotated_preshared_keys: dict[str, str] = field(default_factory=dict)
+    prefix_filters: dict[tuple[str, str], PrefixFilterModel] = field(
+        default_factory=dict
+    )
+    as_path_filters: dict[tuple[str, str], AsPathFilterModel] = field(
+        default_factory=dict
+    )
+    community_filters: dict[tuple[str, str], CommunityFilterModel] = field(
+        default_factory=dict
+    )
+    route_policies: dict[str, RoutePolicyModel] = field(default_factory=dict)
+    inline_communities: dict[str, str] = field(default_factory=dict)
 
     converted_config: list[str] = field(default_factory=list)
     diagnostics: list[ConversionDiagnostic] = field(default_factory=list)
@@ -264,9 +303,14 @@ class ConversionState:
 class Converter:
     """Stateful converter for transforming ScreenOS lines into Junos lines."""
 
-    def __init__(self, progress_interval: int = 100) -> None:
+    def __init__(
+        self,
+        progress_interval: int = 100,
+        psk_factory: Callable[[str], str] | None = None,
+    ) -> None:
         self.state = ConversionState()
         self.progress_interval = max(progress_interval, 1)
+        self.psk_factory = psk_factory or generate_preshared_key
 
     def combine_dicts(self, kind: str) -> None:
         if kind == "service":
@@ -391,6 +435,7 @@ class Converter:
 
         self.render_interfaces()
         self.render_vpns()
+        self.render_routing_policies()
         self.render_routing()
         ordered_policies = self._ordered_policies()
         self.render_nat(ordered_policies)
@@ -1263,6 +1308,10 @@ class Converter:
         command = tokens[3].lower()
         if command == "route":
             self.parse_static_route(vrouter, tokens[4:], line, line_number)
+        elif command == "access-list":
+            self.parse_prefix_filter(vrouter, tokens[4:], line, line_number)
+        elif command == "route-map":
+            self.parse_route_policy(vrouter, tokens[4:], line, line_number)
         elif command == "protocol" and len(tokens) >= 6:
             if tokens[4].lower() != "bgp":
                 self.record_failure(
@@ -1283,6 +1332,470 @@ class Converter:
                 f"unsupported virtual-router command: {' '.join(tokens[3:])}",
                 line_number,
             )
+
+    # ------------------------------------------------------------------
+    # BGP routing policy: access lists, as-path lists, community lists,
+    # and route maps.
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _filter_name(kind: str, vrouter: str, list_id: str) -> str:
+        return sanity_check_naming(f"screenos_{kind}_{vrouter}_{list_id}")
+
+    def parse_prefix_filter(
+        self,
+        vrouter: str,
+        tokens: list[str],
+        line: str,
+        line_number: int,
+    ) -> None:
+        """Parse `set vrouter VR access-list ID (permit|deny) ip PREFIX SEQ`."""
+
+        if (
+            len(tokens) != 5
+            or tokens[1].lower() not in ("permit", "deny")
+            or tokens[2].lower() != "ip"
+        ):
+            self.record_failure(
+                line,
+                f"unsupported access-list entry: {' '.join(tokens)}",
+                line_number,
+            )
+            return
+
+        list_id, action, _, raw_prefix, raw_sequence = tokens
+        if not list_id.isdigit() or not raw_sequence.isdigit():
+            self.record_failure(
+                line,
+                "access-list id and sequence must be numeric",
+                line_number,
+            )
+            return
+
+        try:
+            prefix = ipaddress.ip_network(raw_prefix, strict=False)
+        except ValueError:
+            self.record_failure(line, "invalid access-list prefix", line_number)
+            return
+
+        key = (vrouter, list_id)
+        prefix_filter = self.state.prefix_filters.get(key)
+        if prefix_filter is None:
+            prefix_filter = PrefixFilterModel(
+                vrouter=vrouter,
+                list_id=list_id,
+                junos_name=self._filter_name("acl", vrouter, list_id),
+                entries=[],
+            )
+            self.state.prefix_filters[key] = prefix_filter
+
+        sequence = int(raw_sequence)
+        if any(entry.sequence == sequence for entry in prefix_filter.entries):
+            self.record_failure(
+                line,
+                f"duplicate access-list {list_id} sequence {sequence}",
+                line_number,
+            )
+            return
+
+        prefix_filter.entries.append(
+            PrefixFilterEntryModel(
+                sequence=sequence,
+                action=action.lower(),
+                prefix=str(prefix),
+                line_number=line_number,
+                source_line=line,
+            )
+        )
+
+    @staticmethod
+    def translate_as_path_regex(pattern: str) -> str | None:
+        """Translate the Cisco-style ScreenOS AS-path idioms Junos can express.
+
+        Junos matches whitespace-separated AS numbers rather than characters, so
+        only the anchored and `_`-delimited forms with numeric AS terms are
+        translated. Anything else returns None and is diagnosed instead of
+        being guessed at.
+        """
+
+        text = pattern.strip().strip('"')
+        if text in (".*", "^.*$"):
+            return ".*"
+        if text == "^$":
+            return "()"
+
+        leading_any = False
+        trailing_any = False
+        if text.startswith("^"):
+            text = text[1:]
+        elif text.startswith("_"):
+            text = text[1:]
+            leading_any = True
+        else:
+            return None
+
+        if text.endswith("$"):
+            text = text[:-1]
+        elif text.endswith("_"):
+            text = text[:-1]
+            trailing_any = True
+        else:
+            return None
+
+        core = text.strip()
+        if not core or not all(term.isdigit() for term in core.split()):
+            return None
+
+        parts = [".*"] if leading_any else []
+        parts.append(core)
+        if trailing_any:
+            parts.append(".*")
+        return " ".join(parts)
+
+    def parse_as_path_filter(
+        self,
+        vrouter: str,
+        tokens: list[str],
+        line: str,
+        line_number: int,
+    ) -> None:
+        """Parse `... protocol bgp as-path-access-list ID (permit|deny) REGEX`."""
+
+        if len(tokens) != 4 or tokens[2].lower() not in ("permit", "deny"):
+            self.record_failure(
+                line,
+                f"unsupported BGP as-path list entry: {' '.join(tokens[1:])}",
+                line_number,
+            )
+            return
+
+        _, list_id, action, pattern = tokens
+        if not list_id.isdigit():
+            self.record_failure(
+                line,
+                "BGP as-path list id must be numeric",
+                line_number,
+            )
+            return
+        if action.lower() == "deny":
+            self.record_failure(
+                line,
+                (
+                    "a denied BGP as-path entry has no Junos as-path equivalent; "
+                    "invert it with an explicit policy term manually"
+                ),
+                line_number,
+            )
+            return
+
+        translated = self.translate_as_path_regex(pattern)
+        if translated is None:
+            self.record_failure(
+                line,
+                (
+                    f'BGP as-path expression "{pattern}" has no verified Junos '
+                    "translation; no substitution was made"
+                ),
+                line_number,
+            )
+            return
+
+        key = (vrouter, list_id)
+        as_path_filter = self.state.as_path_filters.get(key)
+        if as_path_filter is None:
+            as_path_filter = AsPathFilterModel(
+                vrouter=vrouter,
+                list_id=list_id,
+                junos_name=self._filter_name("as_path", vrouter, list_id),
+                patterns=[],
+            )
+            self.state.as_path_filters[key] = as_path_filter
+        if translated not in as_path_filter.patterns:
+            as_path_filter.patterns.append(translated)
+
+    def parse_community_filter(
+        self,
+        vrouter: str,
+        tokens: list[str],
+        line: str,
+        line_number: int,
+    ) -> None:
+        """Parse `... protocol bgp community-list ID (permit|deny) MEMBER`."""
+
+        if len(tokens) != 4 or tokens[2].lower() not in ("permit", "deny"):
+            self.record_failure(
+                line,
+                f"unsupported BGP community list entry: {' '.join(tokens[1:])}",
+                line_number,
+            )
+            return
+
+        _, list_id, action, member = tokens
+        if not list_id.isdigit():
+            self.record_failure(
+                line,
+                "BGP community list id must be numeric",
+                line_number,
+            )
+            return
+        if action.lower() == "deny":
+            self.record_failure(
+                line,
+                (
+                    "a denied BGP community entry has no Junos community "
+                    "equivalent; invert it with an explicit policy term manually"
+                ),
+                line_number,
+            )
+            return
+        if self.normalize_community(member) is None:
+            self.record_failure(
+                line,
+                f'unsupported BGP community value: "{member}"',
+                line_number,
+            )
+            return
+
+        key = (vrouter, list_id)
+        community_filter = self.state.community_filters.get(key)
+        if community_filter is None:
+            community_filter = CommunityFilterModel(
+                vrouter=vrouter,
+                list_id=list_id,
+                junos_name=self._filter_name("community", vrouter, list_id),
+                members=[],
+            )
+            self.state.community_filters[key] = community_filter
+        if member not in community_filter.members:
+            community_filter.members.append(member)
+
+    @staticmethod
+    def normalize_community(value: str) -> str | None:
+        """Validate a ScreenOS community value against the Junos member forms."""
+
+        lowered = value.lower()
+        if lowered in ("no-export", "no-advertise", "no-export-subconfed"):
+            return lowered
+        if lowered == "internet":
+            return "internet"
+        parts = value.split(":")
+        if len(parts) != 2 or not all(part.isdigit() for part in parts):
+            return None
+        if not all(0 <= int(part) <= 65535 for part in parts):
+            return None
+        return value
+
+    def parse_route_policy(
+        self,
+        vrouter: str,
+        tokens: list[str],
+        line: str,
+        line_number: int,
+    ) -> None:
+        """Parse `set vrouter VR route-map name "NAME" (permit|deny) SEQ [clause]`."""
+
+        if (
+            len(tokens) < 4
+            or tokens[0].lower() != "name"
+            or tokens[2].lower() not in ("permit", "deny")
+            or not tokens[3].isdigit()
+        ):
+            self.record_failure(
+                line,
+                f"unsupported route-map definition: {' '.join(tokens)}",
+                line_number,
+            )
+            return
+
+        name = tokens[1]
+        action = tokens[2].lower()
+        sequence = int(tokens[3])
+        clause = tokens[4:]
+
+        policy = self.state.route_policies.get(name)
+        if policy is None:
+            policy = RoutePolicyModel(
+                name=name,
+                vrouter=vrouter,
+                junos_name=sanity_check_naming(name),
+                line_number=line_number,
+                source_line=line,
+            )
+            self.state.route_policies[name] = policy
+        elif policy.vrouter != vrouter:
+            self.record_failure(
+                line,
+                (
+                    f'route-map "{name}" is defined in more than one virtual '
+                    "router; Junos policy statements are global"
+                ),
+                line_number,
+            )
+            return
+
+        term = policy.terms.get(sequence)
+        if term is None:
+            term = RoutePolicyTermModel(
+                sequence=sequence,
+                action=action,
+                line_number=line_number,
+                source_line=line,
+            )
+            policy.terms[sequence] = term
+        elif term.action != action:
+            self.record_failure(
+                line,
+                (
+                    f'route-map "{name}" sequence {sequence} changes action from '
+                    f"{term.action} to {action}"
+                ),
+                line_number,
+            )
+            return
+
+        if not clause:
+            return
+        if clause[0].lower() == "match":
+            self._parse_route_policy_match(vrouter, term, clause[1:], line, line_number)
+            return
+        if clause[0].lower() == "set":
+            self._parse_route_policy_action(term, clause[1:], line, line_number)
+            return
+        self.record_failure(
+            line,
+            f"unsupported route-map clause: {' '.join(clause)}",
+            line_number,
+        )
+
+    def _parse_route_policy_match(
+        self,
+        vrouter: str,
+        term: RoutePolicyTermModel,
+        clause: list[str],
+        line: str,
+        line_number: int,
+    ) -> None:
+        if len(clause) != 2:
+            term.unmatchable = True
+            self.record_failure(
+                line,
+                f"unsupported route-map match: {' '.join(clause)}",
+                line_number,
+            )
+            return
+
+        keyword, value = clause[0].lower(), clause[1]
+        if keyword == "ip" and value.isdigit():
+            term.matches.append(("prefix-filter", f"{vrouter}\x00{value}"))
+            return
+        if keyword == "as-path" and value.isdigit():
+            term.matches.append(("as-path", f"{vrouter}\x00{value}"))
+            return
+        if keyword == "community" and value.isdigit():
+            term.matches.append(("community", f"{vrouter}\x00{value}"))
+            return
+        if keyword == "metric" and value.isdigit():
+            term.matches.append(("metric", value))
+            return
+        # An unrepresented match would leave the term matching every route, so
+        # the whole policy is withheld rather than widened.
+        term.unmatchable = True
+        self.record_failure(
+            line,
+            f"unsupported route-map match: {' '.join(clause)}",
+            line_number,
+        )
+
+    def _parse_route_policy_action(
+        self,
+        term: RoutePolicyTermModel,
+        clause: list[str],
+        line: str,
+        line_number: int,
+    ) -> None:
+        if not clause:
+            self.record_failure(line, "empty route-map set clause", line_number)
+            return
+
+        keyword = clause[0].lower()
+        if keyword == "local-preference" and len(clause) == 2 and clause[1].isdigit():
+            term.actions.append(("local-preference", clause[1]))
+            return
+        if keyword == "metric" and len(clause) == 2 and clause[1].isdigit():
+            term.actions.append(("metric", clause[1]))
+            return
+        if (
+            keyword == "origin"
+            and len(clause) == 2
+            and clause[1].lower()
+            in (
+                "igp",
+                "egp",
+                "incomplete",
+            )
+        ):
+            term.actions.append(("origin", clause[1].lower()))
+            return
+        if keyword == "next-hop" and len(clause) == 2:
+            try:
+                next_hop = ipaddress.ip_address(clause[1])
+            except ValueError:
+                self.record_failure(line, "invalid route-map next hop", line_number)
+                return
+            term.actions.append(("next-hop", str(next_hop)))
+            return
+        if keyword == "as-path-prepend" and len(clause) == 2:
+            prepend = clause[1].split()
+            if not prepend or not all(item.isdigit() for item in prepend):
+                self.record_failure(
+                    line,
+                    "route-map as-path prepend requires numeric AS values",
+                    line_number,
+                )
+                return
+            term.actions.append(("as-path-prepend", " ".join(prepend)))
+            return
+        if keyword == "community" and len(clause) in (2, 3):
+            member = self.normalize_community(clause[1])
+            if member is None:
+                self.record_failure(
+                    line,
+                    f'unsupported BGP community value: "{clause[1]}"',
+                    line_number,
+                )
+                return
+            mode = "set"
+            if len(clause) == 3:
+                if clause[2].lower() != "additive":
+                    self.record_failure(
+                        line,
+                        f"unsupported route-map set clause: {' '.join(clause)}",
+                        line_number,
+                    )
+                    return
+                mode = "add"
+            junos_name = sanity_check_naming(
+                f"screenos_community_{member.replace(':', '_')}"
+            )
+            self.state.inline_communities[junos_name] = member
+            term.actions.append((f"community-{mode}", junos_name))
+            return
+        if keyword == "weight":
+            self.record_failure(
+                line,
+                (
+                    "BGP weight is Cisco/ScreenOS local and has no Junos "
+                    "equivalent; express the preference with local-preference "
+                    "or a Junos policy manually"
+                ),
+                line_number,
+            )
+            return
+        self.record_failure(
+            line,
+            f"unsupported route-map set clause: {' '.join(clause)}",
+            line_number,
+        )
 
     def parse_static_route(
         self,
@@ -1441,6 +1954,14 @@ class Converter:
         line = _redact_bgp_authentication(line)
         if not tokens:
             self.record_failure(line, "malformed BGP definition", line_number)
+            return
+
+        keyword = tokens[0].lower()
+        if keyword == "as-path-access-list":
+            self.parse_as_path_filter(vrouter, tokens, line, line_number)
+            return
+        if keyword == "community-list":
+            self.parse_community_filter(vrouter, tokens, line, line_number)
             return
 
         instance = self._bgp_instance(vrouter, line, line_number)
@@ -1710,6 +2231,163 @@ class Converter:
         if junos_name is None:
             return "set protocols bgp"
         return f"set routing-instances {junos_name} protocols bgp"
+
+    def render_routing_policies(self) -> None:
+        """Render ScreenOS route maps and their filters as Junos policy options."""
+
+        if not (
+            self.state.prefix_filters
+            or self.state.as_path_filters
+            or self.state.community_filters
+            or self.state.route_policies
+            or self.state.inline_communities
+        ):
+            return
+
+        self._manual_review(
+            "Converted BGP routing policy needs review against the source "
+            "device: ScreenOS access lists become Junos route filters with an "
+            "orlonger match, AS-path expressions are translated to Junos "
+            "AS-number regular expressions, and each route map ends in an "
+            "explicit reject term to preserve the ScreenOS implicit deny."
+        )
+
+        for prefix_filter in self.state.prefix_filters.values():
+            prefix = f"set policy-options policy-statement {prefix_filter.junos_name}"
+            for entry in sorted(prefix_filter.entries, key=lambda item: item.sequence):
+                term = f"{prefix} term t{entry.sequence}"
+                self.convert_config(f"{term} from route-filter {entry.prefix} orlonger")
+                self.convert_config(
+                    f"{term} then {'accept' if entry.action == 'permit' else 'reject'}"
+                )
+            self.convert_config(f"{prefix} term screenos_implicit_deny then reject")
+
+        for as_path_filter in self.state.as_path_filters.values():
+            for index, pattern in enumerate(as_path_filter.patterns, start=1):
+                name = as_path_filter.junos_name
+                if len(as_path_filter.patterns) > 1:
+                    name = f"{name}_{index}"
+                self.convert_config(f'set policy-options as-path {name} "{pattern}"')
+
+        for community_filter in self.state.community_filters.values():
+            for member in community_filter.members:
+                self.convert_config(
+                    f"set policy-options community {community_filter.junos_name} "
+                    f"members {member}"
+                )
+
+        for junos_name, member in self.state.inline_communities.items():
+            self.convert_config(
+                f"set policy-options community {junos_name} members {member}"
+            )
+
+        for policy in self.state.route_policies.values():
+            prefix = f"set policy-options policy-statement {policy.junos_name}"
+
+            # Resolve every term first. Rendering a policy with one term missing
+            # would change which routes the remaining terms accept, so an
+            # unresolved filter omits the whole policy and the dangling Junos
+            # import/export reference fails the commit loudly.
+            rendered_terms: list[str] = []
+            unresolved = False
+            for sequence in sorted(policy.terms):
+                term_model = policy.terms[sequence]
+                term = f"{prefix} term t{sequence}"
+                matches = self._resolve_route_policy_matches(term, term_model)
+                if matches is None:
+                    unresolved = True
+                    break
+                rendered_terms.extend(matches)
+                for kind, value in term_model.actions:
+                    if kind == "community-set":
+                        rendered_terms.append(f"{term} then community set {value}")
+                    elif kind == "community-add":
+                        rendered_terms.append(f"{term} then community add {value}")
+                    elif kind == "as-path-prepend":
+                        rendered_terms.append(f'{term} then as-path-prepend "{value}"')
+                    else:
+                        rendered_terms.append(f"{term} then {kind} {value}")
+                rendered_terms.append(
+                    f"{term} then "
+                    f"{'accept' if term_model.action == 'permit' else 'reject'}"
+                )
+
+            if unresolved:
+                self._manual_review(
+                    f'ScreenOS route map "{policy.name}" was not converted because '
+                    "one of its filters has no Junos equivalent. Any BGP import or "
+                    "export statement that references it will fail the Junos commit "
+                    "until the policy is written by hand."
+                )
+                continue
+
+            for rendered_line in rendered_terms:
+                self.convert_config(rendered_line)
+            self.convert_config(f"{prefix} term screenos_implicit_deny then reject")
+
+    def _resolve_route_policy_matches(
+        self,
+        term: str,
+        term_model: RoutePolicyTermModel,
+    ) -> list[str] | None:
+        """Return a term's match lines, or None when a filter is unresolved."""
+
+        if term_model.unmatchable:
+            return None
+
+        rendered: list[str] = []
+        for kind, value in term_model.matches:
+            if kind == "metric":
+                rendered.append(f"{term} from metric {value}")
+                continue
+
+            vrouter, _, list_id = value.partition("\x00")
+            key = (vrouter, list_id)
+            if kind == "prefix-filter":
+                prefix_filter = self.state.prefix_filters.get(key)
+                if prefix_filter is None:
+                    self.record_failure(
+                        term_model.source_line,
+                        f"route-map references undefined access-list {list_id}",
+                        term_model.line_number,
+                    )
+                    return None
+                rendered.append(f"{term} from policy {prefix_filter.junos_name}")
+            elif kind == "as-path":
+                as_path_filter = self.state.as_path_filters.get(key)
+                if as_path_filter is None:
+                    self.record_failure(
+                        term_model.source_line,
+                        (
+                            "route-map references BGP as-path list "
+                            f"{list_id}, which was not converted"
+                        ),
+                        term_model.line_number,
+                    )
+                    return None
+                names = [as_path_filter.junos_name]
+                if len(as_path_filter.patterns) > 1:
+                    names = [
+                        f"{as_path_filter.junos_name}_{index}"
+                        for index in range(1, len(as_path_filter.patterns) + 1)
+                    ]
+                for name in names:
+                    rendered.append(f"{term} from as-path {name}")
+            else:
+                community_filter = self.state.community_filters.get(key)
+                if community_filter is None:
+                    self.record_failure(
+                        term_model.source_line,
+                        (
+                            "route-map references BGP community list "
+                            f"{list_id}, which was not converted"
+                        ),
+                        term_model.line_number,
+                    )
+                    return None
+                rendered.append(f"{term} from community {community_filter.junos_name}")
+
+        return rendered
 
     def render_routing(self) -> None:
         emitted_instances: set[str] = set()
@@ -2477,8 +3155,10 @@ class Converter:
             self.record_failure(
                 line,
                 (
-                    "IKE preshared key omitted; configure a Junos pre-shared-key "
-                    "manually on the generated IKE policy"
+                    f'IKE preshared key for gateway "{name}" was discarded and '
+                    "replaced with a freshly generated key on the converted IKE "
+                    "policy; agree the new key with the remote tunnel owner and "
+                    "set it on both peers before cutover"
                 ),
                 line_number,
             )
@@ -2736,7 +3416,7 @@ class Converter:
             return
         self._manual_review(
             "IPsec output requires manual validation of peer identities, routing, "
-            "NAT traversal, cryptographic policy, and omitted preshared keys before deployment."
+            "NAT traversal, and cryptographic policy before deployment."
         )
         emitted_ike_proposals: dict[str, tuple[object, ...]] = {}
         emitted_ike_gateways: set[str] = set()
@@ -2873,6 +3553,12 @@ class Converter:
                 policy_prefix = f"set security ike policy {ike_policy_name}"
                 self.convert_config(f"{policy_prefix} mode {gateway.exchange_mode}")
                 self.convert_config(f"{policy_prefix} proposals {ike_proposal.name}")
+                if gateway.preshared_key_omitted:
+                    replacement_key = self.psk_factory(gateway.name)
+                    self.state.rotated_preshared_keys[gateway.name] = replacement_key
+                    self.convert_config(
+                        f'{policy_prefix} pre-shared-key ascii-text "{replacement_key}"'
+                    )
                 gateway_prefix = f"set security ike gateway {gateway.name}"
                 self.convert_config(f"{gateway_prefix} ike-policy {ike_policy_name}")
                 if gateway.endpoint_kind == "address":
@@ -2936,6 +3622,16 @@ class Converter:
                     f"{vpn_prefix} ike proxy-identity service {vpn.proxy_service}"
                 )
             self.state.rendered_vpns.add(source_vpn_name)
+
+        if self.state.rotated_preshared_keys:
+            rotated = ", ".join(sorted(self.state.rotated_preshared_keys))
+            self._manual_review(
+                "ScreenOS preshared keys are never carried across. A freshly "
+                "generated key was written to the converted IKE policy for "
+                f"{rotated}. Each tunnel stays down until the same new key is "
+                "agreed with the owner of the remote peer and configured on both "
+                "ends. Treat the converted configuration as secret material."
+            )
 
     _IDP_GROUP_PATTERN: Final[re.Pattern[str]] = re.compile(
         r"^(?P<severity>CRITICAL|HIGH|MEDIUM|LOW|INFO):"

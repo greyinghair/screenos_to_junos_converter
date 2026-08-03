@@ -221,7 +221,7 @@ def test_manual_review_warnings_are_shown(client) -> None:
 
     assert response.status_code == 200
     assert b"Manual review required" in response.data
-    assert b"omitted preshared keys" in response.data
+    assert b"agreed with the owner of the remote peer" in response.data
 
 
 def test_unexpected_failure_does_not_log_or_return_submitted_configuration(

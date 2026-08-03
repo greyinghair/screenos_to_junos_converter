@@ -5,3 +5,12 @@
 6|BGP instance "blue-vr" has no local AS
 7|BGP MD5 authentication secret omitted; configure a Junos authentication key manually
 8|source-based and source-interface routes are unsupported
+9|invalid access-list prefix
+10|access-list id and sequence must be numeric
+11|a denied BGP as-path entry has no Junos as-path equivalent; invert it with an explicit policy term manually
+12|BGP as-path expression "64512{2,3}" has no verified Junos translation; no substitution was made
+13|a denied BGP community entry has no Junos community equivalent; invert it with an explicit policy term manually
+14|unsupported BGP community value: "not-a-community"
+15|BGP weight is Cisco/ScreenOS local and has no Junos equivalent; express the preference with local-preference or a Junos policy manually
+16|unsupported route-map match: interface ethernet0/0
+17|route-map references undefined access-list 99

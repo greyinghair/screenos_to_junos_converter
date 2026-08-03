@@ -15,9 +15,18 @@ from packages.converter_core import Converter
 
 FIXTURE_ROOT = Path(__file__).parent / "fixtures" / "features"
 
+# Generated keys are random by design, so fixture-exact assertions inject a
+# deterministic factory. Production runs use the cryptographic default.
+FIXTURE_PSK = "FixtureGeneratedKeyDoNotDeploy00"
+
+
+def fixture_psk(gateway_name: str) -> str:
+    del gateway_name
+    return FIXTURE_PSK
+
 
 def run_feature(name: str) -> Converter:
-    converter = Converter(progress_interval=9999)
+    converter = Converter(progress_interval=9999, psk_factory=fixture_psk)
     converter.read_file(FIXTURE_ROOT / f"{name}.screenos")
     return converter
 
@@ -32,7 +41,7 @@ def test_ipsec_fixture_is_linked_exact_and_deterministic() -> None:
 
     assert first.state.converted_config == expected_feature("ipsec_vpn")
     assert second.state.converted_config == first.state.converted_config
-    assert first.state.succeeded == 50
+    assert first.state.succeeded == 51
     assert first.state.failed == 1
     assert all(
         isinstance(proposal, IkeProposalModel)
@@ -68,8 +77,10 @@ def test_ipsec_secrets_are_omitted_redacted_and_warned() -> None:
     ] == [
         (
             7,
-            "IKE preshared key omitted; configure a Junos pre-shared-key manually "
-            "on the generated IKE policy",
+            'IKE preshared key for gateway "branch_gateway" was discarded and '
+            "replaced with a freshly generated key on the converted IKE policy; "
+            "agree the new key with the remote tunnel owner and set it on both "
+            "peers before cutover",
         )
     ]
     assert converter.state.diagnostics[0].line.endswith(
@@ -77,8 +88,34 @@ def test_ipsec_secrets_are_omitted_redacted_and_warned() -> None:
     )
     assert converter.state.manual_review_warnings == [
         "IPsec output requires manual validation of peer identities, routing, "
-        "NAT traversal, cryptographic policy, and omitted preshared keys before deployment."
+        "NAT traversal, and cryptographic policy before deployment.",
+        "ScreenOS preshared keys are never carried across. A freshly generated "
+        "key was written to the converted IKE policy for branch_gateway. Each "
+        "tunnel stays down until the same new key is agreed with the owner of "
+        "the remote peer and configured on both ends. Treat the converted "
+        "configuration as secret material.",
     ]
+
+
+def test_generated_preshared_keys_are_random_and_never_derived_from_the_source() -> (
+    None
+):
+    first = Converter(progress_interval=9999)
+    second = Converter(progress_interval=9999)
+    first.read_file(FIXTURE_ROOT / "ipsec_vpn.screenos")
+    second.read_file(FIXTURE_ROOT / "ipsec_vpn.screenos")
+
+    first_key = first.state.rotated_preshared_keys["branch_gateway"]
+    second_key = second.state.rotated_preshared_keys["branch_gateway"]
+
+    assert first_key != second_key
+    assert len(first_key) == 32
+    assert first_key.isalnum()
+    assert "fixture-only-secret" not in repr(first.state)
+    assert (
+        f"set security ike policy branch_gateway_ike_policy pre-shared-key "
+        f'ascii-text "{first_key}"' in first.state.converted_config
+    )
 
 
 def test_idp_fixture_preserves_rule_order_actions_and_attachment() -> None:

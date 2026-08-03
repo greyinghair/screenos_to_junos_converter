@@ -12,6 +12,7 @@ PolicyPlacement = Literal["append", "top", "before"]
 PolicyMatchKind = Literal["source-address", "destination-address", "application"]
 BgpAddressFamily = Literal["inet", "inet6"]
 SourceNatKind = Literal["pool", "interface"]
+RoutePolicyAction = Literal["permit", "deny"]
 IkeEndpointKind = Literal["address", "dynamic"]
 IkeExchangeMode = Literal["main", "aggressive"]
 IdpAction = Literal[
@@ -324,3 +325,69 @@ class IdpRuleModel:
     log_attacks: bool
     line_number: int
     source_line: str
+
+
+@dataclass(frozen=True, slots=True)
+class PrefixFilterEntryModel:
+    """One ordered ScreenOS access-list prefix entry."""
+
+    sequence: int
+    action: RoutePolicyAction
+    prefix: str
+    line_number: int
+    source_line: str
+
+
+@dataclass(slots=True)
+class PrefixFilterModel:
+    """A ScreenOS access-list used as a route-map prefix match."""
+
+    vrouter: str
+    list_id: str
+    junos_name: str
+    entries: list[PrefixFilterEntryModel] = field(default_factory=list)
+
+
+@dataclass(slots=True)
+class AsPathFilterModel:
+    """A ScreenOS BGP as-path access list translated for Junos."""
+
+    vrouter: str
+    list_id: str
+    junos_name: str
+    patterns: list[str] = field(default_factory=list)
+
+
+@dataclass(slots=True)
+class CommunityFilterModel:
+    """A ScreenOS BGP community list translated for Junos."""
+
+    vrouter: str
+    list_id: str
+    junos_name: str
+    members: list[str] = field(default_factory=list)
+
+
+@dataclass(slots=True)
+class RoutePolicyTermModel:
+    """One ScreenOS route-map sequence normalized as a Junos policy term."""
+
+    sequence: int
+    action: RoutePolicyAction
+    line_number: int
+    source_line: str
+    matches: list[tuple[str, str]] = field(default_factory=list)
+    actions: list[tuple[str, str]] = field(default_factory=list)
+    unmatchable: bool = False
+
+
+@dataclass(slots=True)
+class RoutePolicyModel:
+    """A ScreenOS route-map normalized as a Junos policy-statement."""
+
+    name: str
+    vrouter: str
+    junos_name: str
+    line_number: int
+    source_line: str
+    terms: dict[int, RoutePolicyTermModel] = field(default_factory=dict)

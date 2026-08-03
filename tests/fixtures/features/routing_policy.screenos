@@ -1,0 +1,28 @@
+set interface ethernet0/0 zone "Untrust"
+set interface ethernet0/0 ip 198.51.100.1/24
+set vrouter "trust-vr" access-list 10 permit ip 192.0.2.0/24 10
+set vrouter "trust-vr" access-list 10 deny ip 0.0.0.0/0 20
+set vrouter "trust-vr" access-list 20 permit ip 198.51.100.0/24 10
+set vrouter "trust-vr" protocol bgp as-path-access-list 1 permit "^64512$"
+set vrouter "trust-vr" protocol bgp as-path-access-list 2 permit "_64520_"
+set vrouter "trust-vr" protocol bgp community-list 1 permit 65001:100
+set vrouter "trust-vr" route-map name "RM-IN" permit 10
+set vrouter "trust-vr" route-map name "RM-IN" permit 10 match ip 10
+set vrouter "trust-vr" route-map name "RM-IN" permit 10 set local-preference 200
+set vrouter "trust-vr" route-map name "RM-IN" permit 10 set community 65001:100 additive
+set vrouter "trust-vr" route-map name "RM-IN" permit 20 match as-path 2
+set vrouter "trust-vr" route-map name "RM-IN" permit 20 set metric 50
+set vrouter "trust-vr" route-map name "RM-IN" deny 30 match community 1
+set vrouter "trust-vr" route-map name "RM-OUT" permit 10 match ip 20
+set vrouter "trust-vr" route-map name "RM-OUT" permit 10 set as-path-prepend "64500 64500"
+set vrouter "trust-vr" route-map name "RM-OUT" permit 10 set origin igp
+set vrouter "trust-vr" route-map name "RM-OUT" permit 20 match metric 100
+set vrouter "trust-vr" route-map name "RM-OUT" permit 20 set next-hop 198.51.100.9
+set vrouter "trust-vr" route-map name "RM-OUT" deny 30
+set vrouter "trust-vr" protocol bgp 65001
+set vrouter "trust-vr" protocol bgp router-id 198.51.100.1
+set vrouter "trust-vr" protocol bgp enable
+set vrouter "trust-vr" protocol bgp neighbor 198.51.100.2 remote-as 64512
+set vrouter "trust-vr" protocol bgp neighbor 198.51.100.2 enable
+set vrouter "trust-vr" protocol bgp neighbor 198.51.100.2 route-map "RM-IN" in
+set vrouter "trust-vr" protocol bgp neighbor 198.51.100.2 route-map "RM-OUT" out
