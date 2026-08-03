@@ -15,6 +15,7 @@ set security ike proposal phase1_secure encryption-algorithm aes-256-cbc
 set security ike proposal phase1_secure lifetime-seconds 28800
 set security ike policy branch_gateway_ike_policy mode main
 set security ike policy branch_gateway_ike_policy proposals phase1_secure
+set security ike policy branch_gateway_ike_policy pre-shared-key ascii-text "FixtureGeneratedKeyDoNotDeploy00"
 set security ike gateway branch_gateway ike-policy branch_gateway_ike_policy
 set security ike gateway branch_gateway address 198.51.100.1
 set security ike gateway branch_gateway external-interface ge-0/0/0.0

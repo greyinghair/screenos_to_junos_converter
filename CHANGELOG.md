@@ -4,6 +4,19 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased
 
+- feat: generate a fresh random pre-shared key for every converted IKE gateway
+  and write it to the Junos IKE policy, so a converted VPN is complete rather
+  than half configured. The ScreenOS secret is still never read into the
+  output; the generated key is a placeholder that must be agreed with the
+  remote peer owner and set on both ends.
+- feat: convert ScreenOS BGP routing policy. Access lists become Junos
+  route-filter subroutine policies, as-path and community lists become
+  `policy-options` objects, and route maps become policy statements whose names
+  match the import/export references the BGP conversion already emitted.
+- fix: withhold a whole route map when a match condition or referenced filter
+  has no Junos equivalent, rather than emitting the remaining terms and
+  changing which routes the policy accepts.
+
 - feat: accept the ScreenOS command forms a device writes when saving its
   configuration, so a `get config` capture no longer needs hand editing before
   conversion: blank and comment lines, `set policy id NUMBER` context blocks

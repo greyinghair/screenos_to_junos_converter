@@ -32,6 +32,10 @@ It is a migration aid, not a complete device configuration translator.
 - BGP local-AS/router-ID configuration and enabled IPv4/IPv6 peers, including
   peer groups, hold times, source interfaces, and import/export policy
   references.
+- BGP routing policy: ScreenOS access lists, as-path lists, community lists,
+  and route maps become Junos `policy-options` prefix subroutines, as-path
+  and community objects, and policy statements whose names match the
+  import/export references the BGP conversion emits.
 - MIP static NAT, DIP source pools, and policy-linked DIP or egress-interface
   source NAT. NAT rules reuse converted interfaces, zones, address prefixes,
   services, and policy ordering.
@@ -45,8 +49,11 @@ It is a migration aid, not a complete device configuration translator.
   converted into an always-on one.
 - Explicit IKE Phase 1 and IPsec Phase 2 proposals, static or dynamic IKE
   gateways, route-based VPNs bound to converted `st0` interfaces, proxy IDs,
-  and paired policy-based VPN actions. Preshared secrets are redacted and must
-  be configured manually on the generated IKE policy.
+  and paired policy-based VPN actions. The ScreenOS preshared secret is
+  discarded and a fresh random key is written to the converted IKE policy, so
+  the VPN is not left half configured. That key is a placeholder: agree it
+  with the owner of the remote peer and set it on both ends before cutover,
+  and treat the converted output as secret material.
 - ScreenOS Deep Inspection severity/service signature and anomaly groups to
   Junos dynamic attack groups and ordered IDP rulebases, attached directly to
   the converted permit policy on Junos 18.2R1 and later.

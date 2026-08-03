@@ -29,6 +29,7 @@ def run_fixture(path: Path) -> Converter:
         "routing",
         "nat",
         "device_output",
+        "routing_policy",
     ],
 )
 def test_supported_feature_fixtures_are_exact_and_deterministic(feature: str) -> None:

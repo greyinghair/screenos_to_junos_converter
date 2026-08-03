@@ -1,0 +1,44 @@
+set applications application udp_161 protocol udp destination-port 161
+set applications application-set junos-dns application junos-dns-udp
+set applications application-set junos-dns application junos-dns-tcp
+set interfaces ge-0/0/0 unit 0 family inet address 198.51.100.1/24
+set security zones security-zone Untrust interfaces ge-0/0/0.0
+set policy-options policy-statement screenos_acl_trust_vr_10 term t10 from route-filter 192.0.2.0/24 orlonger
+set policy-options policy-statement screenos_acl_trust_vr_10 term t10 then accept
+set policy-options policy-statement screenos_acl_trust_vr_10 term t20 from route-filter 0.0.0.0/0 orlonger
+set policy-options policy-statement screenos_acl_trust_vr_10 term t20 then reject
+set policy-options policy-statement screenos_acl_trust_vr_10 term screenos_implicit_deny then reject
+set policy-options policy-statement screenos_acl_trust_vr_20 term t10 from route-filter 198.51.100.0/24 orlonger
+set policy-options policy-statement screenos_acl_trust_vr_20 term t10 then accept
+set policy-options policy-statement screenos_acl_trust_vr_20 term screenos_implicit_deny then reject
+set policy-options as-path screenos_as_path_trust_vr_1 "64512"
+set policy-options as-path screenos_as_path_trust_vr_2 ".* 64520 .*"
+set policy-options community screenos_community_trust_vr_1 members 65001:100
+set policy-options community screenos_community_65001_100 members 65001:100
+set policy-options policy-statement rm_in term t10 from policy screenos_acl_trust_vr_10
+set policy-options policy-statement rm_in term t10 then local-preference 200
+set policy-options policy-statement rm_in term t10 then community add screenos_community_65001_100
+set policy-options policy-statement rm_in term t10 then accept
+set policy-options policy-statement rm_in term t20 from as-path screenos_as_path_trust_vr_2
+set policy-options policy-statement rm_in term t20 then metric 50
+set policy-options policy-statement rm_in term t20 then accept
+set policy-options policy-statement rm_in term t30 from community screenos_community_trust_vr_1
+set policy-options policy-statement rm_in term t30 then reject
+set policy-options policy-statement rm_in term screenos_implicit_deny then reject
+set policy-options policy-statement rm_out term t10 from policy screenos_acl_trust_vr_20
+set policy-options policy-statement rm_out term t10 then as-path-prepend "64500 64500"
+set policy-options policy-statement rm_out term t10 then origin igp
+set policy-options policy-statement rm_out term t10 then accept
+set policy-options policy-statement rm_out term t20 from metric 100
+set policy-options policy-statement rm_out term t20 then next-hop 198.51.100.9
+set policy-options policy-statement rm_out term t20 then accept
+set policy-options policy-statement rm_out term t30 then reject
+set policy-options policy-statement rm_out term screenos_implicit_deny then reject
+set routing-options autonomous-system 65001
+set routing-options router-id 198.51.100.1
+set protocols bgp group screenos_peer_198_51_100_2 type external
+set protocols bgp group screenos_peer_198_51_100_2 peer-as 64512
+set protocols bgp group screenos_peer_198_51_100_2 family inet unicast
+set protocols bgp group screenos_peer_198_51_100_2 import rm_in
+set protocols bgp group screenos_peer_198_51_100_2 export rm_out
+set protocols bgp group screenos_peer_198_51_100_2 neighbor 198.51.100.2

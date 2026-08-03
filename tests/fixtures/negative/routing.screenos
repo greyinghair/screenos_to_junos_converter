@@ -6,3 +6,12 @@ set vrouter trust-vr route 192.0.2.0/24 interface null permanent
 set vrouter blue-vr protocol bgp enable
 set vrouter blue-vr protocol bgp neighbor peer-group "Legacy" md5-authentication "fixture-secret"
 set vrouter trust-vr route source in-interface ethernet0/0 192.0.2.0/24 vrouter untrust-vr
+set vrouter "trust-vr" access-list 70 permit ip 192.0.2.0/33 10
+set vrouter "trust-vr" access-list 71 permit ip 192.0.2.0/24 abc
+set vrouter "trust-vr" protocol bgp as-path-access-list 3 deny "_65100$"
+set vrouter "trust-vr" protocol bgp as-path-access-list 4 permit "64512{2,3}"
+set vrouter "trust-vr" protocol bgp community-list 5 deny 65001:666
+set vrouter "trust-vr" protocol bgp community-list 6 permit not-a-community
+set vrouter "trust-vr" route-map name "RM-BAD" permit 10 set weight 100
+set vrouter "trust-vr" route-map name "RM-BAD" permit 20 match interface ethernet0/0
+set vrouter "trust-vr" route-map name "RM-MISSING" permit 10 match ip 99
