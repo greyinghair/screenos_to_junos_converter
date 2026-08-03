@@ -1,0 +1,36 @@
+# Saved ScreenOS configuration excerpt using the forms a device writes.
+
+set service "Echo Request" protocol icmp type 8 code 0
+set service "Dest Unreachable" protocol icmp type 3
+set service "GRE Transport" protocol 47 src-port 0-65535 dst-port 0-65535
+set service "OSPF Transport" protocol 89
+set service "Web Alt" protocol tcp src-port 0-65535 dst-port 8080-8080
+set group service "Transport Suite" comment "Routing protocol transports"
+set group service "Transport Suite" add "GRE Transport"
+set group service "Transport Suite" add "OSPF Transport"
+
+set address "Trust" "Users" 192.0.2.0 255.255.255.128
+set address "Trust" "Servers" 192.0.2.128 255.255.255.128
+set group address "Trust" "Internal" comment "All internal ranges"
+set group address "Trust" "Internal" add "Users"
+set group address "Trust" "Internal" add "Servers"
+set address "Untrust" "Peer" 198.51.100.10 255.255.255.255
+set address "Untrust" "Peer Backup" 198.51.100.11 255.255.255.255
+
+set interface ethernet0/0 zone "Untrust"
+set interface ethernet0/0 ip 198.51.100.1 255.255.255.0
+set interface ethernet0/1 zone "Trust"
+set interface ethernet0/1 ip 192.0.2.1 255.255.255.0
+set interface ethernet0/1.100 tag 100 zone "Trust"
+set interface ethernet0/1.100 ip 203.0.113.1 255.255.255.0
+set interface ethernet0/0 mip 198.51.100.20 host 192.0.2.20 netmask 255.255.255.255 vr trust-vr
+
+set policy id 10 name "Outbound" from "Trust" to "Untrust"  "Internal" "Peer" "Web Alt" permit
+set policy id 10
+set dst-address "Peer Backup"
+set service "TRACEROUTE"
+set service "Transport Suite"
+set log session-init
+set count
+exit
+set policy id 20 name "Inbound" from "Untrust" to "Trust"  "Peer" "MIP(198.51.100.20)" "Echo Request" permit log

@@ -28,6 +28,7 @@ def run_fixture(path: Path) -> Converter:
         "interfaces",
         "routing",
         "nat",
+        "device_output",
     ],
 )
 def test_supported_feature_fixtures_are_exact_and_deterministic(feature: str) -> None:
@@ -57,7 +58,7 @@ def test_supported_feature_fixtures_are_exact_and_deterministic(feature: str) ->
         ("addresses", 4),
         ("references", 3),
         ("interfaces", 3),
-        ("policies", 5),
+        ("policies", 14),
         ("routing", 7),
         ("nat", 17),
     ],

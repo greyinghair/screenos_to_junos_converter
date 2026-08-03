@@ -4,3 +4,9 @@
 7|policy option 'log alert' has no lossless Junos mapping
 8|policy 40 references missing before target 99
 9|policy move references an undefined policy or different context
+10|policy count alarm requires two numeric thresholds
+11|policy count alarm thresholds are unsupported; the policy and its counter are converted without them
+13|scheduled global policy 80 omitted from output; convert the ScreenOS scheduler to a Junos scheduler and reattach the policy manually
+15|policy traffic shaping is unsupported; the policy is converted without it, configure Junos CoS manually
+16|policy context references undefined global policy 95
+17|policy continuation has no resolvable base policy or object

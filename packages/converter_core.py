@@ -21,6 +21,7 @@ from .conversion_models import (
     IdpRuleModel,
     IkeGatewayModel,
     IkeProposalModel,
+    InterfaceMapping,
     InterfaceModel,
     IpsecProposalModel,
     IpsecVpnModel,
@@ -107,6 +108,7 @@ DEFAULT_APP_MAP: Final[dict[str, str]] = {
     "TCP-ANY": "junos-tcp-any",
     "TELNET": "junos-telnet",
     "TFTP": "junos-tftp",
+    "TRACEROUTE": "junos-traceroute",
     "UDP-ANY": "junos-udp-any",
     "UUCP": "junos-uucp",
     "VDO Live": "junos-vdo-live",
@@ -132,8 +134,20 @@ MISSING_CONFIG_LINES: Final[list[str]] = [
 RE_MULTI_DST: Final[re.Pattern[str]] = re.compile(r'^set dst-address\s+".+"$')
 RE_MULTI_SRC: Final[re.Pattern[str]] = re.compile(r'^set src-address\s+".+"$')
 RE_MULTI_SVC: Final[re.Pattern[str]] = re.compile(r'^set service\s+".+"$')
+RE_MULTI_LOG: Final[re.Pattern[str]] = re.compile(r"^set log(?:\s+session-init)?$")
+RE_MULTI_COUNT: Final[re.Pattern[str]] = re.compile(r"^set count$")
+RE_COMMENT: Final[re.Pattern[str]] = re.compile(r"^[#!]")
+RE_DOTTED_NETMASK: Final[re.Pattern[str]] = re.compile(r"\d{1,3}(?:\.\d{1,3}){3}")
+RE_CONTEXT_EXIT: Final[re.Pattern[str]] = re.compile(r"^exit$", re.IGNORECASE)
 RE_GROUP_SERVICE: Final[re.Pattern[str]] = re.compile(
     r'^set group service\s+"[^"]+"\s+add\s+"[^"]+"\s*$',
+)
+RE_GROUP_SERVICE_COMMENT: Final[re.Pattern[str]] = re.compile(
+    r'^set group service\s+"(?P<group>[^"]+)"\s+comment\s+"(?P<comment>[^"]*)"\s*$',
+)
+RE_GROUP_ADDRESS_COMMENT: Final[re.Pattern[str]] = re.compile(
+    r'^set group address\s+"(?P<zone>[^"]+)"\s+"(?P<group>[^"]+)"\s+'
+    r'comment\s+"(?P<comment>[^"]*)"\s*$',
 )
 RE_ADDRESS_LINE: Final[re.Pattern[str]] = re.compile(r"^set address")
 RE_GROUP_ADDRESS: Final[re.Pattern[str]] = re.compile(
@@ -223,6 +237,9 @@ class ConversionState:
         default_factory=list
     )
     reported_disabled_policy_keys: set[tuple[str, str]] = field(default_factory=set)
+    scheduled_policy_keys: set[tuple[str, str]] = field(default_factory=set)
+    group_descriptions: dict[tuple[str, str, str], str] = field(default_factory=dict)
+    rendered_group_keys: set[tuple[str, str, str]] = field(default_factory=set)
 
     static_routes: list[StaticRouteModel] = field(default_factory=list)
     bgp_instances: dict[str, BgpInstanceModel] = field(default_factory=dict)
@@ -315,12 +332,30 @@ class Converter:
             if linecount % self.progress_interval == 0:
                 LOGGER.info("Parsing line %s", linecount)
 
+            stripped = line.strip()
+            if not stripped or RE_COMMENT.search(stripped):
+                # Saved ScreenOS configurations and hand-edited migration
+                # bundles carry blank separators and comment banners. They hold
+                # no configuration state, so they are neither converted nor
+                # counted as unconverted input.
+                continue
+            if RE_CONTEXT_EXIT.search(stripped):
+                # "exit" closes a ScreenOS sub-command context. The only
+                # context this parser tracks is the policy context opened by a
+                # bare "set policy id NUMBER".
+                self.state.current_policy = None
+                continue
+
             if RE_MULTI_DST.search(line):
                 self.multi_line_rule(line, "destination-address", linecount)
             elif RE_MULTI_SRC.search(line):
                 self.multi_line_rule(line, "source-address", linecount)
             elif RE_MULTI_SVC.search(line):
                 self.multi_line_rule(line, "application", linecount)
+            elif RE_MULTI_LOG.search(line):
+                self.multi_line_flag(line, "log", linecount)
+            elif RE_MULTI_COUNT.search(line):
+                self.multi_line_flag(line, "count", linecount)
             elif RE_ATTACK.search(line):
                 self.parse_idp_continuation(line, linecount)
             elif RE_POLICY.search(line):
@@ -339,10 +374,14 @@ class Converter:
                     self._parse_service_line(line, linecount)
                 elif RE_GROUP_SERVICE.search(line):
                     self.create_app_set(line, linecount)
+                elif RE_GROUP_SERVICE_COMMENT.search(line):
+                    self.record_group_description(line, "service", linecount)
                 elif RE_ADDRESS_LINE.search(line):
                     self.create_address_book(line, linecount)
                 elif RE_GROUP_ADDRESS.search(line):
                     self.create_address_set(line, linecount)
+                elif RE_GROUP_ADDRESS_COMMENT.search(line):
+                    self.record_group_description(line, "address", linecount)
                 else:
                     self.record_failure(
                         line,
@@ -424,6 +463,61 @@ class Converter:
 
         self.state.service_dicts[ns_group_name] = junos_app_set_name.lower()
         self.convert_config(converted_line)
+        self._flush_group_description(("service", "", ns_group_name))
+
+    def record_group_description(
+        self,
+        line: str,
+        kind: str,
+        line_number: int | None = None,
+    ) -> None:
+        """Record a ScreenOS group comment as a pending Junos set description.
+
+        Junos rejects an address set or application set that has no members, so
+        the description is held until the group has emitted its first member.
+        """
+
+        pattern = (
+            RE_GROUP_SERVICE_COMMENT if kind == "service" else RE_GROUP_ADDRESS_COMMENT
+        )
+        match = pattern.fullmatch(line)
+        if match is None:
+            self.record_failure(line, "malformed group comment", line_number)
+            return
+
+        zone = "" if kind == "service" else self.remember_zone(match.group("zone"))
+        key = (kind, zone, match.group("group"))
+        self.state.group_descriptions[key] = match.group("comment")
+        if key in self.state.rendered_group_keys:
+            self._flush_group_description(key)
+
+    def _flush_group_description(self, key: tuple[str, str, str]) -> None:
+        """Emit a pending group description once the group has a member."""
+
+        self.state.rendered_group_keys.add(key)
+        comment = self.state.group_descriptions.pop(key, None)
+        if comment is None:
+            return
+
+        kind, zone, group = key
+        if kind == "service":
+            self.convert_config(
+                f"set applications application-set {sanity_check_naming(group).lower()} "
+                f'description "{comment}"'
+            )
+            return
+
+        junos_set = sanity_check_naming(group)
+        if zone.lower() == "global":
+            self.convert_config(
+                f"set security address-book global address-set {junos_set} "
+                f'description "{comment}"'
+            )
+            return
+        self.convert_config(
+            f"set security zones security-zone {zone} address-book "
+            f'address-set {junos_set} description "{comment}"'
+        )
 
     @staticmethod
     def normalize_zone(zone: str) -> str:
@@ -592,6 +686,7 @@ class Converter:
             )
 
         self.convert_config(converted_line)
+        self._flush_group_description(("address", zone, ns_address_grp))
 
     def parse_interface_line(self, line: str, line_number: int) -> None:
         try:
@@ -655,6 +750,39 @@ class Converter:
             )
             return
 
+        # A saved ScreenOS configuration writes the VLAN tag and the zone
+        # binding of a subinterface on one line. Split it so each half reuses
+        # the single-attribute validation below.
+        attribute_groups = [attributes]
+        if (
+            len(attributes) == 4
+            and attributes[0].lower() == "tag"
+            and attributes[2].lower() == "zone"
+        ):
+            attribute_groups = [attributes[:2], attributes[2:]]
+
+        for group in attribute_groups:
+            if not self._apply_interface_attribute(
+                model,
+                mapping,
+                group,
+                line,
+                line_number,
+            ):
+                return
+
+        model.configured = True
+
+    def _apply_interface_attribute(
+        self,
+        model: InterfaceModel,
+        mapping: InterfaceMapping,
+        attributes: list[str],
+        line: str,
+        line_number: int,
+    ) -> bool:
+        """Apply one validated interface attribute group to the model."""
+
         if len(attributes) == 2 and attributes[0].lower() == "zone":
             model.zone = self.remember_zone(attributes[1])
         elif len(attributes) == 2 and attributes[0].lower() == "description":
@@ -666,7 +794,7 @@ class Converter:
                     "management-interface MTU is not portable to Junos fxp0",
                     line_number,
                 )
-                return
+                return False
             try:
                 mtu = int(attributes[1])
             except ValueError:
@@ -677,7 +805,7 @@ class Converter:
                     "interface MTU must be between 256 and 9216",
                     line_number,
                 )
-                return
+                return False
             model.mtu = mtu
         elif len(attributes) == 2 and attributes[0].lower() == "tag":
             try:
@@ -690,7 +818,7 @@ class Converter:
                     "interface VLAN tag must be between 1 and 4094",
                     line_number,
                 )
-                return
+                return False
             if mapping.kind not in ("ethernet", "vlan") or (
                 mapping.kind == "ethernet" and mapping.unit == 0
             ):
@@ -699,7 +827,7 @@ class Converter:
                     "VLAN tags require an Ethernet subinterface or VLAN interface",
                     line_number,
                 )
-                return
+                return False
             model.vlan_id = vlan_id
         elif (
             len(attributes) == 2
@@ -716,14 +844,42 @@ class Converter:
                     "invalid interface IPv4 prefix",
                     line_number,
                 )
-                return
+                return False
             if address.version != 4:
                 self.record_failure(
                     line,
                     "IPv6 interface prefixes require the 'ipv6 ip' form",
                     line_number,
                 )
-                return
+                return False
+            normalized = str(address)
+            if normalized not in model.ipv4_addresses:
+                model.ipv4_addresses.append(normalized)
+        elif (
+            len(attributes) == 3
+            and attributes[0].lower() == "ip"
+            and RE_DOTTED_NETMASK.fullmatch(attributes[2])
+        ):
+            # ScreenOS accepts both "ip ADDRESS/PREFIX" and the dotted
+            # "ip ADDRESS NETMASK" form; saved configurations use the latter.
+            try:
+                address = ipaddress.ip_interface(
+                    f"{attributes[1]}/{attributes[2]}",
+                )
+            except ValueError:
+                self.record_failure(
+                    line,
+                    "invalid interface IPv4 address or netmask",
+                    line_number,
+                )
+                return False
+            if address.version != 4:
+                self.record_failure(
+                    line,
+                    "IPv6 interface prefixes require the 'ipv6 ip' form",
+                    line_number,
+                )
+                return False
             normalized = str(address)
             if normalized not in model.ipv4_addresses:
                 model.ipv4_addresses.append(normalized)
@@ -749,14 +905,14 @@ class Converter:
                     "invalid interface IPv6 prefix",
                     line_number,
                 )
-                return
+                return False
             if address.version != 6:
                 self.record_failure(
                     line,
                     "IPv4 interface prefixes require the 'ip' form",
                     line_number,
                 )
-                return
+                return False
             normalized = str(address)
             if normalized not in model.ipv6_addresses:
                 model.ipv6_addresses.append(normalized)
@@ -766,9 +922,9 @@ class Converter:
                 f"unsupported interface attribute: {' '.join(attributes)}",
                 line_number,
             )
-            return
+            return False
 
-        model.configured = True
+        return True
 
     def parse_mip_definition(
         self,
@@ -795,7 +951,8 @@ class Converter:
             if option == "netmask" and index + 1 < len(attributes):
                 netmask = attributes[index + 1]
                 index += 2
-            elif option == "vrouter" and index + 1 < len(attributes):
+            elif option in ("vrouter", "vr") and index + 1 < len(attributes):
+                # A saved ScreenOS configuration abbreviates the keyword to "vr".
                 vrouter = attributes[index + 1]
                 index += 2
             else:
@@ -3088,6 +3245,47 @@ class Converter:
                     break
             return
 
+        if len(tokens[index:]) == 2 and tokens[index].lower() == "schedule":
+            # A scheduler bounds when the rule is active. Emitting the rule
+            # without it would silently convert a time-bounded policy into an
+            # always-on one, so the policy is omitted instead.
+            self.state.disabled_policy_keys.add(policy_key)
+            self.state.disabled_policy_sources[policy_key] = (line_number, line)
+            self.state.scheduled_policy_keys.add(policy_key)
+            for policy in self.state.policies:
+                if policy.scope == scope and policy.policy_id == policy_id:
+                    policy.disabled = True
+                    break
+            return
+
+        if tokens[index].lower() == "traffic":
+            # Traffic shaping and prioritisation are enforcement-neutral, so
+            # the policy is still converted and the option is diagnosed.
+            policy = next(
+                (
+                    candidate
+                    for candidate in self.state.policies
+                    if candidate.scope == scope and candidate.policy_id == policy_id
+                ),
+                None,
+            )
+            if policy is None:
+                self.record_failure(
+                    line,
+                    f"policy context references undefined {scope} policy {policy_id}",
+                    line_number,
+                )
+                return
+            self.record_failure(
+                line,
+                (
+                    "policy traffic shaping is unsupported; the policy is "
+                    "converted without it, configure Junos CoS manually"
+                ),
+                line_number,
+            )
+            return
+
         placement = "append"
         before_policy_id = None
         policy_name = policy_id
@@ -3262,12 +3460,27 @@ class Converter:
                 count_enabled = True
                 index += 1
                 if index < len(tokens) and tokens[index].lower() == "alarm":
+                    thresholds = tokens[index + 1 : index + 3]
+                    if len(thresholds) != 2 or not all(
+                        threshold.isdigit() for threshold in thresholds
+                    ):
+                        self.record_failure(
+                            line,
+                            "policy count alarm requires two numeric thresholds",
+                            line_number,
+                        )
+                        return
+                    # Alarm thresholds only annotate the counter, so the policy
+                    # and its counter still convert.
                     self.record_failure(
                         line,
-                        "policy count alarms are unsupported",
+                        (
+                            "policy count alarm thresholds are unsupported; the "
+                            "policy and its counter are converted without them"
+                        ),
                         line_number,
                     )
-                    return
+                    index += 3
             elif option == "attack":
                 if scope != "zone" or action != "permit" or tunnel_vpn is not None:
                     self.record_failure(
@@ -3799,10 +4012,7 @@ class Converter:
                     )
                     self.record_failure(
                         line,
-                        (
-                            f"disabled {policy.scope} policy {policy.policy_id} "
-                            "omitted from output"
-                        ),
+                        self._omission_reason(policy_key),
                         line_number,
                     )
                     self.state.reported_disabled_policy_keys.add(policy_key)
@@ -3959,15 +4169,32 @@ class Converter:
             if policy_key in self.state.reported_disabled_policy_keys:
                 continue
             line_number, line = self.state.disabled_policy_sources[policy_key]
+            state_word = (
+                "scheduled"
+                if policy_key in self.state.scheduled_policy_keys
+                else "disabled"
+            )
             self.record_failure(
                 line,
                 (
-                    f"disabled {policy_key[0]} policy {policy_key[1]} "
+                    f"{state_word} {policy_key[0]} policy {policy_key[1]} "
                     "does not reference a defined policy"
                 ),
                 line_number,
             )
             self.state.reported_disabled_policy_keys.add(policy_key)
+
+    def _omission_reason(self, policy_key: tuple[str, str]) -> str:
+        """Explain why a parsed policy is intentionally left out of the output."""
+
+        scope, policy_id = policy_key
+        if policy_key in self.state.scheduled_policy_keys:
+            return (
+                f"scheduled {scope} policy {policy_id} omitted from output; "
+                "convert the ScreenOS scheduler to a Junos scheduler and "
+                "reattach the policy manually"
+            )
+        return f"disabled {scope} policy {policy_id} omitted from output"
 
     def multi_line_rule(
         self,
@@ -4001,6 +4228,28 @@ class Converter:
         else:
             policy.services.append(reference)
         policy.continuations.append((line_type, reference))
+
+    def multi_line_flag(
+        self,
+        line: str,
+        flag: str,
+        line_number: int | None = None,
+    ) -> None:
+        """Apply a logging or counting flag written inside a policy context."""
+
+        policy = self.state.current_policy
+        if policy is None:
+            self.record_failure(
+                line,
+                "policy continuation has no resolvable base policy or object",
+                line_number,
+            )
+            return
+
+        if flag == "log":
+            policy.log = True
+        else:
+            policy.count = True
 
     def disabled_rule_cleanup(self) -> None:
         """Compatibility no-op; deferred policy rendering already omits disabled rules."""
