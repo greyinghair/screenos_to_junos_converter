@@ -7,3 +7,5 @@
 7|unnumbered donor interface "ethernet0/9" is undefined or has no IPv4 address
 9|IPv4 interface prefixes require the 'ip' form
 10|unsupported interface attribute: monitor link
+11|invalid interface IPv4 address or netmask
+12|unsupported interface attribute: tag 100 zone

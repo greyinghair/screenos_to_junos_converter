@@ -7,3 +7,11 @@ set policy global id 20 disable
 set policy global id 30 "SRC" "DST" "HTTPS" permit log alert
 set policy global id 40 before 99 "SRC" "DST" "HTTPS" permit
 set policy global move 50 before 20
+set policy global id 60 "SRC" "DST" "HTTPS" permit count alarm
+set policy global id 70 "SRC" "DST" "HTTPS" permit count alarm 1000 100
+set policy global id 80 "SRC" "DST" "HTTPS" permit
+set policy global id 80 schedule "Weekends"
+set policy global id 90 "SRC" "DST" "HTTPS" permit
+set policy global id 90 traffic priority 3
+set policy global id 95 traffic priority 3
+set log session-init

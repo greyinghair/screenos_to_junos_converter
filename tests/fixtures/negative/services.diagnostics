@@ -1,3 +1,5 @@
 1|unsupported or unrecognized syntax
 2|Invalid source port range 1024-1 in: set service "Reversed Source" protocol tcp src-port 1024-1 dst-port 443-443
 3|unsupported or unrecognized syntax
+4|IP protocol 6 requires the named tcp, udp, or icmp service form in: set service "Ported Protocol" protocol 6
+5|Invalid ICMP code 300 in: set service "Bad ICMP Code" protocol icmp type 8 code 300

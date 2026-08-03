@@ -1,0 +1,47 @@
+set applications application udp_161 protocol udp destination-port 161
+set applications application-set junos-dns application junos-dns-udp
+set applications application-set junos-dns application junos-dns-tcp
+set applications application icmp_8_0 protocol icmp icmp-type 8 icmp-code 0
+set applications application icmp_3 protocol icmp icmp-type 3
+set applications application protocol_47 protocol 47
+set applications application protocol_89 protocol 89
+set applications application tcp_8080 protocol tcp destination-port 8080
+set applications application-set transport_suite application protocol_47
+set applications application-set transport_suite description "Routing protocol transports"
+set applications application-set transport_suite application protocol_89
+set security zones security-zone Trust address-book address users 192.0.2.0/25
+set security zones security-zone Trust address-book address servers 192.0.2.128/25
+set security zones security-zone Trust address-book address-set internal address users
+set security zones security-zone Trust address-book address-set internal description "All internal ranges"
+set security zones security-zone Trust address-book address-set internal address servers
+set security zones security-zone Untrust address-book address peer 198.51.100.10
+set security zones security-zone Untrust address-book address peer_backup 198.51.100.11
+set interfaces ge-0/0/0 unit 0 family inet address 198.51.100.1/24
+set security zones security-zone Untrust interfaces ge-0/0/0.0
+set interfaces ge-0/0/1 unit 0 family inet address 192.0.2.1/24
+set security zones security-zone Trust interfaces ge-0/0/1.0
+set interfaces ge-0/0/1 vlan-tagging
+set interfaces ge-0/0/1 unit 100 vlan-id 100
+set interfaces ge-0/0/1 unit 100 family inet address 203.0.113.1/24
+set security zones security-zone Trust interfaces ge-0/0/1.100
+set security address-book global address mip_198_51_100_20 192.0.2.20/32
+set security nat static rule-set screenos_mip_ge_0_0_0_0 from interface ge-0/0/0.0
+set security nat static rule-set screenos_mip_ge_0_0_0_0 rule mip_198_51_100_20 match destination-address 198.51.100.20/32
+set security nat static rule-set screenos_mip_ge_0_0_0_0 rule mip_198_51_100_20 then static-nat prefix 192.0.2.20/32
+set security nat proxy-arp interface ge-0/0/0.0 address 198.51.100.20/32
+set security policies from-zone Trust to-zone Untrust policy outbound match source-address internal
+set security policies from-zone Trust to-zone Untrust policy outbound match destination-address peer
+set security policies from-zone Trust to-zone Untrust policy outbound match application tcp_8080
+set security policies from-zone Trust to-zone Untrust policy outbound then permit
+set security policies from-zone Trust to-zone Untrust policy outbound then log session-init
+set security policies from-zone Trust to-zone Untrust policy outbound then log session-close
+set security policies from-zone Trust to-zone Untrust policy outbound then count
+set security policies from-zone Trust to-zone Untrust policy outbound match destination-address peer_backup
+set security policies from-zone Trust to-zone Untrust policy outbound match application junos-traceroute
+set security policies from-zone Trust to-zone Untrust policy outbound match application transport_suite
+set security policies from-zone Untrust to-zone Trust policy inbound match source-address peer
+set security policies from-zone Untrust to-zone Trust policy inbound match destination-address mip_198_51_100_20
+set security policies from-zone Untrust to-zone Trust policy inbound match application icmp_8_0
+set security policies from-zone Untrust to-zone Trust policy inbound then permit
+set security policies from-zone Untrust to-zone Trust policy inbound then log session-init
+set security policies from-zone Untrust to-zone Trust policy inbound then log session-close
