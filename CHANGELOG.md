@@ -4,6 +4,26 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased
 
+- feat: accept the ScreenOS command forms a device writes when saving its
+  configuration, so a `get config` capture no longer needs hand editing before
+  conversion: blank and comment lines, `set policy id NUMBER` context blocks
+  terminated by `exit`, in-context `set log [session-init]` and `set count`,
+  dotted-netmask interface addresses, combined subinterface `tag VLAN zone ZONE`
+  lines, and the abbreviated `vr` keyword on MIPs.
+- feat: convert ICMP services with a type and optional code, and numeric
+  IP-protocol services, to Junos applications. Protocols 1, 6, and 17 are
+  rejected because a bare protocol number would discard their type or port
+  semantics.
+- feat: convert address-group and service-group comments to Junos address-set
+  and application-set descriptions.
+- feat: add the `TRACEROUTE` ScreenOS default service to the built-in
+  application map.
+- fix: omit a policy that carries a ScreenOS scheduler instead of converting it
+  into an always-on Junos policy, and name the manual scheduler step in the
+  diagnostic.
+- fix: convert a policy that uses `count alarm` or per-policy traffic shaping
+  instead of dropping it, and diagnose only the unsupported option.
+
 - feat: add an in-memory conversion service and request-isolated Flask web UI.
 - feat: add safe paste/upload, preview, diagnostics, and download workflows.
 - ci: build and smoke-test containers on relevant pull requests without publishing.

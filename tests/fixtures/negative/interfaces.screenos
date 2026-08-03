@@ -8,3 +8,5 @@ set interface tunnel.2 ip unnumbered interface ethernet0/9
 set interface tunnel.2 zone VPN
 set interface ethernet0/2 ipv6 ip 192.0.2.1/24
 set interface ethernet0/3 monitor link
+set interface ethernet0/4 ip 198.51.100.1 255.255.255.999
+set interface ethernet0/5 tag 100 zone

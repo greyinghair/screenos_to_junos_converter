@@ -11,15 +11,18 @@ It is a migration aid, not a complete device configuration translator.
 
 ## What It Converts
 
-- TCP and UDP custom services with numeric destination ports, plus supported
+- TCP and UDP custom services with numeric destination ports, ICMP services
+  with a type and optional code, numeric IP-protocol services, plus supported
   ScreenOS default services.
-- Service groups to Junos application sets.
-- Dotted-IPv4/netmask addresses and FQDN addresses, plus address groups, to
-  zone or global address books and address sets.
+- Service groups to Junos application sets, including group comments as
+  application-set descriptions.
+- Dotted-IPv4/netmask addresses and FQDN addresses, plus address groups and
+  their comments, to zone or global address books and address sets.
 - Physical Ethernet interfaces, tagged subinterfaces, VLAN/IRB interfaces,
   tunnel interfaces, and the management interface. The converter handles
-  descriptions, CIDR IPv4 and IPv6 interface addresses, MTU, administrative
-  state, VLAN tags, IPv4 unnumbered donors, and security-zone bindings.
+  descriptions, CIDR or dotted-netmask IPv4 and IPv6 interface addresses, MTU,
+  administrative state, VLAN tags, IPv4 unnumbered donors, and security-zone
+  bindings.
 - Numeric zone-specific and global permit/deny/reject policies through one
   policy model, including names, ordering directives, multiline source,
   destination, and service matches, logging, and counters. Zone policies are
@@ -32,8 +35,14 @@ It is a migration aid, not a complete device configuration translator.
 - MIP static NAT, DIP source pools, and policy-linked DIP or egress-interface
   source NAT. NAT rules reuse converted interfaces, zones, address prefixes,
   services, and policy ordering.
+- The command forms a device writes when it saves its configuration: blank
+  and comment lines, `set policy id NUMBER` context blocks terminated by
+  `exit`, in-context `set log` and `set count` flags, and the abbreviated
+  `vr` keyword on MIPs.
 - Disabled policies are identified and intentionally omitted with a
-  line-specific diagnostic, including their linked NAT rules.
+  line-specific diagnostic, including their linked NAT rules. Scheduled
+  policies are omitted the same way so a time-bounded rule is never
+  converted into an always-on one.
 - Explicit IKE Phase 1 and IPsec Phase 2 proposals, static or dynamic IKE
   gateways, route-based VPNs bound to converted `st0` interfaces, proxy IDs,
   and paired policy-based VPN actions. Preshared secrets are redacted and must
