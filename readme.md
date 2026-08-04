@@ -367,6 +367,19 @@ full-SHA tags for deployments, for example:
 docker pull ghcr.io/greyinghair/screenos_to_junos_converter:v1.2.3
 ```
 
+For Docker Compose, save the following as `compose.yml`:
+
+```yaml
+services:
+  juniperconv:
+    image: ghcr.io/greyinghair/screenos_to_junos_converter:latest
+    ports:
+      - "127.0.0.1:8080:8080"
+    restart: unless-stopped
+```
+
+Then start the service with `docker compose up -d`.
+
 The package may require GitHub Container Registry authentication while it is
 private. Release retention and channel-tag behavior are documented in
 [repository maintenance](docs/repository-maintenance.md).
