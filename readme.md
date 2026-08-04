@@ -346,7 +346,7 @@ services:
   juniperconv:
     image: ghcr.io/greyinghair/screenos_to_junos_converter:latest
     ports:
-      - "8080:8080"
+      - "127.0.0.1:8080:8080"
     restart: unless-stopped
 ```
 
