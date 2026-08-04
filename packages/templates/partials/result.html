@@ -1,0 +1,120 @@
+{# Conversion result. Everything here is generated server-side and escaped by
+   Jinja; no converted text is ever inserted as markup. #}
+<section class="result" aria-labelledby="result-heading">
+  <div class="result-header">
+    <div>
+      <p class="eyebrow">Step 3 of 3</p>
+      <h2 id="result-heading">
+        <svg class="icon" aria-hidden="true"><use href="#icon-output" /></svg>
+        Generated Junos configuration
+      </h2>
+    </div>
+    <button id="download-preview" class="secondary" type="button"
+      data-download-name="{{ download_name }}">Download preview</button>
+  </div>
+
+  <dl class="metrics">
+    <div><dt>Emitted lines</dt><dd>{{ result.converted_count }}</dd></div>
+    <div><dt>Unsupported lines</dt><dd>{{ result.unsupported_count }}</dd></div>
+    <div><dt>Applied mappings</dt><dd>{{ result.applied_interface_mappings | length }}</dd></div>
+  </dl>
+
+  {% if result.manual_review_warnings %}
+    <div class="notice warning">
+      <strong>
+        <svg class="icon" aria-hidden="true"><use href="#icon-warning" /></svg>
+        Manual review required
+      </strong>
+      <ul>
+        {% for warning in result.manual_review_warnings %}
+          <li>{{ warning }}</li>
+        {% endfor %}
+      </ul>
+    </div>
+  {% endif %}
+
+  {% if result.diagnostics %}
+    <details>
+      <summary>Unsupported-line diagnostics ({{ result.unsupported_count }})</summary>
+      <ol>
+        {% for diagnostic in result.diagnostics %}
+          <li>
+            {% if diagnostic.line_number %}Line {{ diagnostic.line_number }}: {% endif %}
+            {{ diagnostic.reason }}
+          </li>
+        {% endfor %}
+      </ol>
+    </details>
+  {% endif %}
+
+  {% if result.applied_interface_mappings %}
+    <details open>
+      <summary>Applied interface mappings ({{ result.applied_interface_mappings | length }})</summary>
+      <ul class="applied-mappings">
+        {% for applied in result.applied_interface_mappings %}
+          <li>
+            <svg class="icon" aria-hidden="true"><use href="#icon-mapping" /></svg>
+            {{ applied.screenos_name }} &rarr; {{ applied.summary }}
+          </li>
+        {% endfor %}
+      </ul>
+    </details>
+  {% endif %}
+
+  {% if result.interface_inventory.interfaces %}
+    <details>
+      <summary>Interface inventory ({{ result.interface_inventory.interfaces | length }})</summary>
+      <table class="inventory">
+        <caption>Every ScreenOS interface and the configuration bound to it</caption>
+        <thead>
+          <tr>
+            <th scope="col">ScreenOS interface</th>
+            <th scope="col">Junos interface</th>
+            <th scope="col">Zone</th>
+            <th scope="col">Bindings</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for entry in result.interface_inventory.interfaces %}
+            <tr>
+              <th scope="row">{{ entry.screenos_name }}</th>
+              <td>{{ entry.junos_name }}</td>
+              <td>{{ entry.zone or "unbound" }}</td>
+              <td>
+                {% if entry.has_bindings %}
+                  <ul>
+                    {% for binding in entry.bindings %}
+                      <li>
+                        <span class="tag">{{ binding.category }}</span>
+                        {% if binding.line_number %}Line {{ binding.line_number }}: {% endif %}
+                        {{ binding.summary }}
+                      </li>
+                    {% endfor %}
+                  </ul>
+                {% else %}
+                  No detected bindings
+                {% endif %}
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+
+      {% if result.interface_inventory.unresolved %}
+        <h3>Unresolved interface references</h3>
+        <ul>
+          {% for reference in result.interface_inventory.unresolved %}
+            <li>
+              {{ reference.screenos_name }} &mdash;
+              {% if reference.line_number %}Line {{ reference.line_number }}: {% endif %}
+              {{ reference.summary }}
+            </li>
+          {% endfor %}
+        </ul>
+      {% endif %}
+    </details>
+  {% endif %}
+
+  <label for="converted_output">Converted output</label>
+  <textarea id="converted_output" rows="20" readonly spellcheck="false">{{ result.output }}</textarea>
+</section>

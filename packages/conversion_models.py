@@ -9,6 +9,13 @@ from typing import Final, Literal
 
 InterfaceKind = Literal["ethernet", "management", "tunnel", "vlan"]
 VlanMode = Literal["access", "tagged"]
+InterfaceMappingField = Literal[
+    "screenos_name",
+    "physical_name",
+    "unit",
+    "vlan_mode",
+    "vlan_id",
+]
 PolicyScope = Literal["zone", "global"]
 PolicyPlacement = Literal["append", "top", "before"]
 PolicyMatchKind = Literal["source-address", "destination-address", "application"]
@@ -99,6 +106,16 @@ class InterfaceMappingRequest:
 
 
 @dataclass(frozen=True, slots=True)
+class InterfaceMappingIssue:
+    """One rejected mapping request, attributed to the field that caused it."""
+
+    index: int
+    screenos_name: str
+    field: InterfaceMappingField
+    message: str
+
+
+@dataclass(frozen=True, slots=True)
 class ResolvedInterfaceMapping:
     """A validated mapping request that renderers may apply without rechecking."""
 
@@ -136,104 +153,186 @@ def junos_interface_kind(physical_name: str) -> InterfaceKind:
     )
 
 
-def _validate_unit(request: InterfaceMappingRequest, kind: InterfaceKind) -> None:
+_MappingProblem = tuple[InterfaceMappingField, str]
+
+
+def _check_unit(
+    request: InterfaceMappingRequest,
+    kind: InterfaceKind,
+) -> _MappingProblem | None:
     if not 0 <= request.unit <= MAX_JUNOS_LOGICAL_UNIT:
-        raise InterfaceMappingError(
+        return (
+            "unit",
             f'"{request.screenos_name}" unit must be between 0 and '
             f"{MAX_JUNOS_LOGICAL_UNIT}",
         )
     if kind == "management" and request.unit != 0:
-        raise InterfaceMappingError(
+        return (
+            "unit",
             f'"{request.screenos_name}" maps to fxp0, which only supports unit 0',
         )
     if kind == "ethernet" and request.vlan_mode == "access" and request.unit != 0:
-        raise InterfaceMappingError(
+        return (
+            "unit",
             f'"{request.screenos_name}" is untagged, so it must use unit 0 on '
             f"{request.physical_name}",
         )
+    return None
 
 
-def _validate_vlan(request: InterfaceMappingRequest, kind: InterfaceKind) -> None:
+def _check_vlan(
+    request: InterfaceMappingRequest,
+    kind: InterfaceKind,
+) -> _MappingProblem | None:
     if request.vlan_mode not in ("access", "tagged"):
-        raise InterfaceMappingError(
+        return (
+            "vlan_mode",
             f'"{request.screenos_name}" has an unsupported VLAN mode: '
             f'"{request.vlan_mode}"',
         )
     if request.vlan_mode == "access":
         if request.vlan_id is not None:
-            raise InterfaceMappingError(
+            return (
+                "vlan_id",
                 f'"{request.screenos_name}" is untagged, so it must not carry a '
                 "VLAN ID",
             )
-        return
+        return None
     if kind not in ("ethernet", "vlan"):
-        raise InterfaceMappingError(
+        return (
+            "vlan_mode",
             f'"{request.screenos_name}" maps to {request.physical_name}, which '
             "does not accept a VLAN tag",
         )
     if request.vlan_id is None or not 1 <= request.vlan_id <= MAX_VLAN_ID:
-        raise InterfaceMappingError(
+        return (
+            "vlan_id",
             f'"{request.screenos_name}" tagged VLAN ID must be between 1 and '
             f"{MAX_VLAN_ID}",
         )
     if kind == "ethernet" and request.unit == 0:
-        raise InterfaceMappingError(
+        return (
+            "unit",
             f'"{request.screenos_name}" tagged mappings require a logical unit '
             "other than 0",
         )
+    return None
 
 
-def resolve_interface_mappings(
+def _check_request(
+    request: InterfaceMappingRequest,
+) -> tuple[InterfaceKind | None, _MappingProblem | None]:
+    """Validate one request in isolation, before cross-request conflicts."""
+
+    try:
+        map_screenos_interface(request.screenos_name)
+    except ValueError as exc:
+        return None, ("screenos_name", str(exc))
+    try:
+        kind = junos_interface_kind(request.physical_name)
+    except InterfaceMappingError as exc:
+        return None, ("physical_name", str(exc))
+
+    return kind, _check_vlan(request, kind) or _check_unit(request, kind)
+
+
+@dataclass(frozen=True, slots=True)
+class InterfaceMappingReview:
+    """Every accepted mapping plus one issue for each rejected request."""
+
+    mappings: dict[str, ResolvedInterfaceMapping]
+    issues: tuple[InterfaceMappingIssue, ...]
+
+    @property
+    def is_valid(self) -> bool:
+        return not self.issues
+
+
+def review_interface_mappings(
     requests: Iterable[InterfaceMappingRequest],
-) -> dict[str, ResolvedInterfaceMapping]:
-    """Validate operator-selected mappings before any Junos output is rendered.
+) -> InterfaceMappingReview:
+    """Validate operator-selected mappings and report every rejected request.
 
-    The result is keyed by ScreenOS source name in sorted order so generated
-    configuration and annotations stay deterministic regardless of the order in
-    which a client submitted the mappings.
+    A rejected request claims no destination, so one bad row cannot cascade
+    into conflict errors on the rows that follow it. Callers that need a single
+    outcome use `resolve_interface_mappings`; callers that show a form use the
+    issues to mark the exact field an operator has to correct.
     """
 
     resolved: dict[str, ResolvedInterfaceMapping] = {}
+    issues: list[InterfaceMappingIssue] = []
     destinations: dict[tuple[str, int], str] = {}
     tagging_modes: dict[str, tuple[VlanMode, str]] = {}
 
-    for request in requests:
-        if request.screenos_name in resolved:
-            raise InterfaceMappingError(
-                f'duplicate mapping for ScreenOS interface "{request.screenos_name}"',
+    def reject(
+        index: int,
+        request: InterfaceMappingRequest,
+        problem: _MappingProblem,
+    ) -> None:
+        field_name, message = problem
+        issues.append(
+            InterfaceMappingIssue(
+                index=index,
+                screenos_name=request.screenos_name,
+                field=field_name,
+                message=message,
             )
-        try:
-            map_screenos_interface(request.screenos_name)
-        except ValueError as exc:
-            raise InterfaceMappingError(str(exc)) from exc
+        )
 
-        kind = junos_interface_kind(request.physical_name)
-        _validate_vlan(request, kind)
-        _validate_unit(request, kind)
+    for index, request in enumerate(requests):
+        if request.screenos_name in resolved:
+            reject(
+                index,
+                request,
+                (
+                    "screenos_name",
+                    "duplicate mapping for ScreenOS interface "
+                    f'"{request.screenos_name}"',
+                ),
+            )
+            continue
+
+        kind, problem = _check_request(request)
+        if problem is not None or kind is None:
+            if problem is not None:
+                reject(index, request, problem)
+            continue
 
         destination = (request.physical_name, request.unit)
         owner = destinations.get(destination)
         if owner is not None:
-            raise InterfaceMappingError(
-                f'"{request.screenos_name}" and "{owner}" both map to '
-                f"{request.physical_name}.{request.unit}",
+            reject(
+                index,
+                request,
+                (
+                    "physical_name",
+                    f'"{request.screenos_name}" and "{owner}" both map to '
+                    f"{request.physical_name}.{request.unit}",
+                ),
             )
-        destinations[destination] = request.screenos_name
+            continue
 
         if kind == "ethernet":
             # Junos enables VLAN tagging on the physical interface, so every
             # logical unit carved out of it must agree on the mode.
             existing_mode = tagging_modes.get(request.physical_name)
             if existing_mode is not None and existing_mode[0] != request.vlan_mode:
-                raise InterfaceMappingError(
-                    f'"{request.screenos_name}" and "{existing_mode[1]}" mix tagged '
-                    f"and untagged units on {request.physical_name}",
+                reject(
+                    index,
+                    request,
+                    (
+                        "vlan_mode",
+                        f'"{request.screenos_name}" and "{existing_mode[1]}" mix '
+                        f"tagged and untagged units on {request.physical_name}",
+                    ),
                 )
+                continue
             tagging_modes[request.physical_name] = (
                 request.vlan_mode,
                 request.screenos_name,
             )
 
+        destinations[destination] = request.screenos_name
         resolved[request.screenos_name] = ResolvedInterfaceMapping(
             screenos_name=request.screenos_name,
             mapping=InterfaceMapping(
@@ -245,7 +344,27 @@ def resolve_interface_mappings(
             vlan_id=request.vlan_id,
         )
 
-    return {name: resolved[name] for name in sorted(resolved)}
+    return InterfaceMappingReview(
+        mappings={name: resolved[name] for name in sorted(resolved)},
+        issues=tuple(issues),
+    )
+
+
+def resolve_interface_mappings(
+    requests: Iterable[InterfaceMappingRequest],
+) -> dict[str, ResolvedInterfaceMapping]:
+    """Validate operator-selected mappings before any Junos output is rendered.
+
+    The result is keyed by ScreenOS source name in sorted order so generated
+    configuration and annotations stay deterministic regardless of the order in
+    which a client submitted the mappings. The first rejected request raises,
+    so no partially remapped configuration is ever rendered.
+    """
+
+    review = review_interface_mappings(requests)
+    if review.issues:
+        raise InterfaceMappingError(review.issues[0].message)
+    return review.mappings
 
 
 @dataclass(slots=True)

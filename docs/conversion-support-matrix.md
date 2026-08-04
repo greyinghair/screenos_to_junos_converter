@@ -104,7 +104,8 @@ turning an assumption into a migration guarantee.
 - Interface mapping destinations outside the documented Junos families, Junos
   aggregate/redundant member-link configuration, native VLAN selection on a
   tagged physical interface, and mapping one ScreenOS interface onto several
-  Junos units. The mapping UI itself is tracked separately in #70.
+  Junos units. The web mapping workspace maps the first 400 discovered
+  interfaces per submission; use the CLI `--interface-map` beyond that.
 - IKEv2-specific ScreenOS gateway syntax, certificates/RSA/DSA/XAuth, multiple
   proposals per gateway or VPN, VPN groups, L2TP, manual-key VPNs, VPN monitor,
   nonzero VPN idle timers, and service-specific proxy IDs.

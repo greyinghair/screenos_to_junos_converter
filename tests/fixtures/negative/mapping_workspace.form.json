@@ -1,0 +1,23 @@
+{
+  "mapping-count": "4",
+  "mapping-source-0": "ethernet0/0",
+  "mapping-destination-0": "ge-0/0/1",
+  "mapping-unit-0": "0",
+  "mapping-vlan-0": "untagged",
+  "mapping-vlan_id-0": "",
+  "mapping-source-1": "ethernet0/2",
+  "mapping-destination-1": "ge-0/0/1",
+  "mapping-unit-1": "0",
+  "mapping-vlan-1": "untagged",
+  "mapping-vlan_id-1": "",
+  "mapping-source-2": "ethernet0/3",
+  "mapping-destination-2": "ge-0/0/4",
+  "mapping-unit-2": "3",
+  "mapping-vlan-2": "tagged",
+  "mapping-vlan_id-2": "",
+  "mapping-source-3": "tunnel.1",
+  "mapping-destination-3": "st0",
+  "mapping-unit-3": "1",
+  "mapping-vlan-3": "tagged",
+  "mapping-vlan_id-3": "77"
+}

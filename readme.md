@@ -36,6 +36,9 @@ It is a migration aid, not a complete device configuration translator.
   zones, policies, address objects, routes, routing instances, NAT rules, VPN
   and tunnel references, unnumbered donors, and unsupported attributes that
   depend on it, plus references to interfaces the configuration never defines.
+  The web page turns that inventory into an interface-mapping workspace where
+  each discovered interface is reviewed and given its Junos destination, unit,
+  and VLAN treatment before conversion runs.
 - Numeric zone-specific and global permit/deny/reject policies through one
   policy model, including names, ordering directives, multiline source,
   destination, and service matches, logging, and counters. Zone policies are
@@ -82,10 +85,6 @@ in the [conversion support matrix](docs/conversion-support-matrix.md).
   interface attributes outside the tested support matrix. Interface mapping
   destinations are limited to the documented Junos families, and one ScreenOS
   interface maps to exactly one Junos unit.
-- The interactive interface-mapping workspace in the web page:
-  [issue 70](https://github.com/greyinghair/screenos_to_junos_converter/issues/70).
-  Approved mappings are accepted by the conversion service and the CLI today,
-  and the web page shows the interface inventory read-only.
 - IPv6, CIDR, wildcard, and address-range address-book input forms;
   non-TCP/UDP custom services; service source-port rendering; and policy
   schedules, alert logging, count alarms, or other unlisted policy options.
@@ -115,6 +114,7 @@ Always review the generated configuration before deployment.
 - `packages/conversion_service.py`: request-scoped in-memory conversion API
 - `packages/conversion_models.py`: normalized interface, policy, routing, and NAT models
 - `packages/interface_inventory.py`: interface binding inventory for migration mapping
+- `packages/mapping_workspace.py`: web interface-mapping workspace rows, form parsing, and flow state
 - `packages/convert_service.py`: service parsing/conversion helpers
 - `packages/web_app.py`: Flask application factory, input validation, and routes
 - `packages/sanity_check_naming.py`: Junos-safe name normalization
@@ -150,6 +150,7 @@ Always review the generated configuration before deployment.
 |   |-- conversion_models.py            # Normalized interface, policy, routing, and NAT models
 |   |-- conversion_service.py           # Request-scoped in-memory conversion API
 |   |-- interface_inventory.py          # Interface binding inventory for migration mapping
+|   |-- mapping_workspace.py            # Web interface-mapping workspace state
 |   |-- convert_service.py              # Service conversion helpers
 |   |-- web_app.py                      # Flask application factory and routes
 |   |-- static/                         # Web application styles and behavior
@@ -166,7 +167,9 @@ Always review the generated configuration before deployment.
 |   |-- test_policy_interface_models.py # Interface mapping and shared policy model tests
 |   |-- test_routing_nat_models.py      # Routing and NAT model/reference tests
 |   |-- test_validation_fixtures.py     # Fixture validation harness
+|   |-- test_mapping_workspace.py        # Mapping workspace rows, form parsing, and flow
 |   |-- test_web_app.py                 # Flask request and security tests
+|   |-- test_web_assets.py              # Client asset budget and accessibility contracts
 |   |-- fixtures/                       # Sanitized conversion fixtures
 |   |-- test_convert_service.py         # Service parser unit tests
 |   `-- test_sanity_check_naming.py     # Naming helper unit tests
@@ -240,9 +243,34 @@ place, so existing conversions are unchanged.
 
 The Flask application uses the same in-memory conversion service as the CLI.
 It accepts either pasted configuration or one UTF-8 `.txt` upload and keeps
-submitted configuration in memory only for the duration of the request. Each
-preview also lists the interface binding inventory so an operator can see what
-depends on every interface before choosing migration destinations.
+submitted configuration in memory only for the duration of the request.
+
+The page walks through three stages, all rendered by the server:
+
+1. **ScreenOS input.** Paste a configuration or upload one `.txt` file.
+2. **Interface mapping workspace.** "Review interface mappings" lists every
+   discovered ScreenOS interface as a card showing its current Junos target,
+   zone, addresses, VLAN tag, and the policies, routes, NAT rules, address
+   objects, and VPN bindings that depend on it. Each card offers a Junos
+   interface field with SRX suggestions, an optional logical unit, and a VLAN
+   treatment of *preserve the source tagging*, *no VLAN tag*, or *tagged VLAN*
+   with an ID. A destination may be any supported SRX interface, not only the
+   one matching the ScreenOS name. Leave a destination empty to keep the
+   converter default. Interfaces that stay unmapped remain listed.
+3. **Junos SRX output.** Preview or download the generated configuration, with
+   diagnostics, manual-review warnings, applied mappings, and the full
+   interface inventory.
+
+Mapping choices are validated by the same rules as the CLI `--interface-map`
+file. Invalid syntax, missing tagged VLAN IDs, duplicate destination units, and
+mixed tagging on one physical interface are reported inline on the control that
+caused them, conversion is refused until they are corrected, and every
+submitted choice survives the rejection. Nothing is stored between requests:
+the configuration and the mapping travel in the form.
+
+Very large configurations stay bounded — the workspace maps the first 400
+discovered interfaces and collapses per-row binding lists above 60 interfaces,
+saying so on the page. Use the CLI `--interface-map` for larger sets.
 
 For local development:
 
