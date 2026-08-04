@@ -1,0 +1,34 @@
+# Applied interface mapping: ethernet0/0 -> ge-0/0/9.0 (untagged)
+# Applied interface mapping: ethernet0/1.100 -> xe-2/0/1.7 (tagged, vlan-id 100)
+set applications application udp_161 protocol udp destination-port 161
+set applications application-set junos-dns application junos-dns-udp
+set applications application-set junos-dns application junos-dns-tcp
+set applications application tcp_8443 protocol tcp destination-port 8443
+set security zones security-zone Trust address-book address src1 192.0.2.10
+set security zones security-zone Untrust address-book address dst1 198.51.100.20
+set interfaces ge-0/0/9 unit 0 family inet address 198.51.100.1/24
+set security zones security-zone Untrust interfaces ge-0/0/9.0
+set interfaces xe-2/0/1 vlan-tagging
+set interfaces xe-2/0/1 unit 7 vlan-id 100
+set interfaces xe-2/0/1 unit 7 family inet address 192.0.2.1/24
+set security zones security-zone Trust interfaces xe-2/0/1.7
+set interfaces ge-0/0/2 unit 0 family inet address 203.0.113.1/24
+set security zones security-zone DMZ interfaces ge-0/0/2.0
+set routing-options static route 0.0.0.0/0 next-hop 198.51.100.254
+set security address-book global address mip_198_51_100_30 192.0.2.10/32
+set security nat static rule-set screenos_mip_ge_0_0_9_0 from interface ge-0/0/9.0
+set security nat static rule-set screenos_mip_ge_0_0_9_0 rule mip_198_51_100_30 match destination-address 198.51.100.30/32
+set security nat static rule-set screenos_mip_ge_0_0_9_0 rule mip_198_51_100_30 then static-nat prefix 192.0.2.10/32
+set security nat proxy-arp interface ge-0/0/9.0 address 198.51.100.30/32
+set security nat source pool screenos_dip_5 address 198.51.100.40/32
+set security nat proxy-arp interface ge-0/0/9.0 address 198.51.100.40/32
+set security nat source rule-set screenos_trust_to_untrust from zone Trust
+set security nat source rule-set screenos_trust_to_untrust to zone Untrust
+set security nat source rule-set screenos_trust_to_untrust rule policy_100_100 match source-address 192.0.2.10/32
+set security nat source rule-set screenos_trust_to_untrust rule policy_100_100 match destination-address 198.51.100.20/32
+set security nat source rule-set screenos_trust_to_untrust rule policy_100_100 match application tcp_8443
+set security nat source rule-set screenos_trust_to_untrust rule policy_100_100 then source-nat pool screenos_dip_5
+set security policies from-zone Trust to-zone Untrust policy 100 match source-address src1
+set security policies from-zone Trust to-zone Untrust policy 100 match destination-address dst1
+set security policies from-zone Trust to-zone Untrust policy 100 match application tcp_8443
+set security policies from-zone Trust to-zone Untrust policy 100 then permit

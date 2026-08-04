@@ -1,0 +1,23 @@
+set address "Trust" "USER1" 192.0.2.10 255.255.255.255
+set address "Trust" "OFFSITE" 203.0.113.64 255.255.255.192
+set address "Untrust" "PARTNER" 198.51.100.20 255.255.255.255
+set interface ethernet0/0 zone "Untrust"
+set interface ethernet0/0 ip 198.51.100.1/24
+set interface ethernet0/1.100 tag 100
+set interface ethernet0/1.100 zone "Trust"
+set interface ethernet0/1.100 ip 192.0.2.1/24
+set interface ethernet0/4 zone "Spare"
+set interface ethernet0/5 description "Cold spare"
+set interface tunnel.10 zone "VPN"
+set interface tunnel.10 ip unnumbered interface ethernet0/0
+set interface ethernet0/0 mip 198.51.100.30 host 192.0.2.10 netmask 255.255.255.255 vr trust-vr
+set interface ethernet0/0 dip 6 198.51.100.40
+set vrouter trust-vr route 0.0.0.0/0 interface ethernet0/0 gateway 198.51.100.254
+set vrouter customer-vr route 203.0.113.0/24 interface tunnel.10
+set ike p1-proposal "phase1_secure" preshare group14 esp aes256 sha2-256 second 28800
+set ike p2-proposal "phase2_secure" group14 esp aes256 sha2-256 second 3600
+set ike gateway "branch_gateway" address 198.51.100.9 Main outgoing-interface "ethernet0/0" preshare "fixture-only-secret" proposal "phase1_secure"
+set vpn "route_vpn" gateway "branch_gateway" replay tunnel idletime 0 proposal "phase2_secure"
+set vpn "route_vpn" bind interface tunnel.10
+set policy id 10 from "Trust" to "Untrust" "USER1" "PARTNER" "ANY" nat src dip-id 6 permit
+set policy id 20 from "Untrust" to "Trust" "PARTNER" "USER1" "ANY" deny

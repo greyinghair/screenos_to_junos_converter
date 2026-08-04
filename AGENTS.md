@@ -24,7 +24,8 @@ line-numbered diagnostic.
 | --- | --- |
 | `convert.py` | CLI argument parsing, output path selection, diagnostic logging. No conversion logic. |
 | `packages/converter_core.py` | ScreenOS parsing, `ConversionState`, and Junos rendering. The engine. |
-| `packages/conversion_models.py` | Normalized interface, policy, routing, NAT, BGP, IPsec, and IDP records shared by parsers and renderers. Also owns `map_screenos_interface`. |
+| `packages/conversion_models.py` | Normalized interface, policy, routing, NAT, BGP, IPsec, and IDP records shared by parsers and renderers. Also owns `map_screenos_interface` and `resolve_interface_mappings`. |
+| `packages/interface_inventory.py` | Read-only interface binding inventory built from a finished `ConversionState`. Derives records only from normalized models and diagnostics. |
 | `packages/conversion_service.py` | Request-scoped API: decode, size/control-byte validation, one fresh `Converter` per call, immutable `ConversionResult`. |
 | `packages/convert_service.py` | ScreenOS *service* (application) parsing helpers. |
 | `packages/web_app.py` | Flask application factory, request validation, security headers, routes. |
@@ -85,6 +86,15 @@ If you add or rename a tracked top-level file, regenerate the README tree with
   `packages/conversion_models.py`. Every interface, zone binding, route, NAT
   rule, and VPN reference resolves names through it. Never add a second mapping
   table or inline regex for `ethernet*`/`mgt`/`tunnel.N`/`vlanN`.
+- Operator-approved interface mappings override that default in exactly one
+  place: `Converter.parse_interface_line` stores the resolved destination on the
+  `InterfaceModel` and in `interface_ns_to_junos`. Renderers read those, never a
+  mapping table of their own, so a remapped interface rewrites every reference.
+  Mapping input is validated by `resolve_interface_mappings` before conversion
+  starts; a renderer must never accept an unvalidated mapping.
+- The interface inventory is derived, not parsed. `build_interface_inventory`
+  reads finished models and diagnostics; it must never re-read configuration
+  text or infer a binding that no parsed object supports.
 - Do not duplicate ScreenOS parsing in browser code. `packages/static/app.js`
   is limited to presentation; all conversion happens server-side through
   `convert_configuration`.
@@ -113,6 +123,11 @@ If you add or rename a tracked top-level file, regenerate the README tree with
 - Cross-reference integrity (policies referencing addresses, services, zones,
   interfaces; NAT referencing interfaces and policies) belongs in
   `tests/test_policy_interface_models.py` and `tests/test_routing_nat_models.py`.
+- Interface mapping validation, remapped rendering, and the binding inventory
+  belong in `tests/test_interface_mappings.py` and
+  `tests/test_interface_inventory.py`. A mapped fixture pairs a `.screenos`
+  source with a `.mappings.json` file, and the unmapped conversion of the same
+  source must stay unchanged.
 - Flask behavior is covered by `tests/test_web_app.py`: security headers,
   rejection paths and status codes, escaping of generated output, and
   per-request converter isolation. Web changes need a request-level test, not

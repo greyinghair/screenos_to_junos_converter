@@ -10,15 +10,20 @@ from .conversion_models import (
     IkeGatewayModel,
     IkeProposalModel,
     InterfaceMapping,
+    InterfaceMappingError,
+    InterfaceMappingRequest,
     InterfaceModel,
     IpsecProposalModel,
     IpsecVpnModel,
     MipModel,
     PolicyModel,
     PolicyReference,
+    ResolvedInterfaceMapping,
     SourceNatRuleModel,
     StaticRouteModel,
+    junos_interface_kind,
     map_screenos_interface,
+    resolve_interface_mappings,
 )
 from .conversion_service import (
     ConfigurationTooLarge,
@@ -28,6 +33,13 @@ from .conversion_service import (
 )
 from .convert_service import convert_service_in_file
 from .converter_core import ConversionState, Converter
+from .interface_inventory import (
+    InterfaceBinding,
+    InterfaceInventory,
+    InterfaceInventoryEntry,
+    UnresolvedInterfaceReference,
+    build_interface_inventory,
+)
 from .sanity_check_naming import sanity_check_naming
 
 __all__ = [
@@ -44,17 +56,27 @@ __all__ = [
     "IdpRuleModel",
     "IkeGatewayModel",
     "IkeProposalModel",
+    "InterfaceBinding",
+    "InterfaceInventory",
+    "InterfaceInventoryEntry",
     "InterfaceMapping",
+    "InterfaceMappingError",
+    "InterfaceMappingRequest",
     "InterfaceModel",
     "IpsecProposalModel",
     "IpsecVpnModel",
     "MipModel",
     "PolicyModel",
     "PolicyReference",
+    "ResolvedInterfaceMapping",
     "SourceNatRuleModel",
     "StaticRouteModel",
+    "UnresolvedInterfaceReference",
+    "build_interface_inventory",
     "convert_configuration",
     "convert_service_in_file",
+    "junos_interface_kind",
     "map_screenos_interface",
+    "resolve_interface_mappings",
     "sanity_check_naming",
 ]

@@ -66,6 +66,7 @@ trap 'rm -f "$TREE_BLOCK_FILE" "$OUTPUT_FILE"' EXIT
     [ -f packages/converter_core.py ] && echo '|   |-- converter_core.py               # Core conversion engine and state'
     [ -f packages/conversion_models.py ] && echo '|   |-- conversion_models.py            # Normalized interface, policy, routing, and NAT models'
     [ -f packages/conversion_service.py ] && echo '|   |-- conversion_service.py           # Request-scoped in-memory conversion API'
+    [ -f packages/interface_inventory.py ] && echo '|   |-- interface_inventory.py          # Interface binding inventory for migration mapping'
     [ -f packages/convert_service.py ] && echo '|   |-- convert_service.py              # Service conversion helpers'
     [ -f packages/web_app.py ] && echo '|   |-- web_app.py                      # Flask application factory and routes'
     [ -d packages/static ] && echo '|   |-- static/                         # Web application styles and behavior'

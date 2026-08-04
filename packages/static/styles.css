@@ -151,6 +151,38 @@ details {
   margin: 1rem 0;
 }
 
+.inventory {
+  border-collapse: collapse;
+  font-size: 0.9rem;
+  width: 100%;
+}
+
+.inventory caption {
+  color: #526670;
+  padding-bottom: 0.5rem;
+  text-align: left;
+}
+
+.inventory th,
+.inventory td {
+  border-bottom: 1px solid #d5dee3;
+  padding: 0.5rem;
+  text-align: left;
+  vertical-align: top;
+}
+
+.inventory ul {
+  margin: 0;
+  padding-left: 1.1rem;
+}
+
+.inventory .tag {
+  background: #eef4f7;
+  border-radius: 4px;
+  font-size: 0.75rem;
+  padding: 0.1rem 0.35rem;
+}
+
 @media (max-width: 600px) {
   .shell {
     margin: 1rem auto;

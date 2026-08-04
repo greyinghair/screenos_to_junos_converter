@@ -1,0 +1,14 @@
+set service "Web API" protocol tcp src-port 0-65535 dst-port 8443-8443
+set address "Trust" "SRC1" 192.0.2.10 255.255.255.255
+set address "Untrust" "DST1" 198.51.100.20 255.255.255.255
+set interface ethernet0/0 zone "Untrust"
+set interface ethernet0/0 ip 198.51.100.1/24
+set interface ethernet0/1.100 tag 100
+set interface ethernet0/1.100 zone "Trust"
+set interface ethernet0/1.100 ip 192.0.2.1/24
+set interface ethernet0/2 zone "DMZ"
+set interface ethernet0/2 ip 203.0.113.1/24
+set interface ethernet0/0 mip 198.51.100.30 host 192.0.2.10 netmask 255.255.255.255 vr trust-vr
+set interface ethernet0/0 dip 5 198.51.100.40
+set vrouter trust-vr route 0.0.0.0/0 interface ethernet0/0 gateway 198.51.100.254
+set policy id 100 from "Trust" to "Untrust" "SRC1" "DST1" "Web API" nat src dip-id 5 permit
