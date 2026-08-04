@@ -30,6 +30,7 @@ trap 'rm -f "$TREE_BLOCK_FILE" "$OUTPUT_FILE"' EXIT
 
   [ -f convert.py ] && echo '|-- convert.py                          # CLI entrypoint: parses args and runs conversion'
   [ -f readme.md ] && echo '|-- readme.md                           # Project overview, usage, CI, and development guidance'
+  [ -f AGENTS.md ] && echo '|-- AGENTS.md                           # Contributor and AI agent guidance for this repository'
   [ -f requirements.txt ] && echo '|-- requirements.txt                    # Runtime dependencies'
   [ -f requirements-dev.txt ] && echo '|-- requirements-dev.txt                # Ranged developer dependencies'
   [ -f requirements-dev-minimum.txt ] && echo '|-- requirements-dev-minimum.txt        # Exact supported dependency floors'

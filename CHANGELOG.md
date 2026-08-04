@@ -4,6 +4,10 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased
 
+- docs: add a repository-root `AGENTS.md` covering project structure, verified
+  commands, architecture boundaries, testing, untrusted-input handling, web UX
+  limits, and contribution workflow, with automation contracts that fail when
+  the documented paths, modules, scripts, or validation entrypoints drift.
 - feat: accept the ScreenOS command forms a device writes when saving its
   configuration, so a `get config` capture no longer needs hand editing before
   conversion: blank and comment lines, `set policy id NUMBER` context blocks

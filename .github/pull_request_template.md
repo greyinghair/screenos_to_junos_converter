@@ -8,3 +8,5 @@ Describe the change and its user impact.
 - [ ] Feature behavior includes positive and negative regression coverage.
 - [ ] New or updated fixtures are sanitized and contain no production data.
 - [ ] Documentation matches the supported behavior.
+- [ ] `AGENTS.md` still matches the project structure, commands, and rules this
+      change touches.
