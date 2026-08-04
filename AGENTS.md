@@ -117,8 +117,8 @@ If you add or rename a tracked top-level file, regenerate the README tree with
   rejection paths and status codes, escaping of generated output, and
   per-request converter isolation. Web changes need a request-level test, not
   only a service-level one.
-- Accessible names, keyboard operation, and reduced-motion behavior for new UI
-  must be asserted in the rendered template, not left to manual review.
+- Accessible names, labels, and keyboard operation for new UI must be asserted
+  in the rendered template, not left to manual review.
 - Large-configuration behavior must stay linear-ish and bounded. Do not add
   per-line work that rescans the whole configuration.
 - Keep the repository/CI contracts in `tests/test_automation_contracts.py`
@@ -151,22 +151,22 @@ possibly hostile. Treat them accordingly.
   `203.0.113.0/24`) and placeholder names. Never commit real customer
   configuration, addresses, or credentials.
 
-## Web UX limits
+## Web interface
 
-- Prefer inline SVG, plain CSS, and small vanilla JavaScript enhancements. No
-  frontend framework, charting library, canvas, WebGL, or video.
-- Keep total first-party compressed client assets at or under 100 KB gzip
-  unless a measurement in the pull request justifies an exception.
-- The interface must remain fully usable with JavaScript disabled: server-side
-  conversion, preview, and download already work without it.
-- Animate only `transform` and `opacity`. No continuously running animation, no
-  background polling, no high-frequency timers. Pause when hidden and honor
-  `prefers-reduced-motion`.
-- Decorative graphics get `aria-hidden`; informational graphics need a text
-  equivalent and must not rely on colour alone. Interactive controls need a
-  visible focus state, an accessible name, and keyboard operation.
+The interface is server-rendered Jinja plus two small static files,
+`packages/static/styles.css` and `packages/static/app.js`. Keep it that shape.
+
+- No frontend framework, bundler, or client-side dependency. Enhancements are
+  plain CSS and small vanilla JavaScript served from `packages/static/`.
+- The interface must stay fully usable with JavaScript disabled. Conversion,
+  preview, diagnostics, and download are server-side; the only script is a
+  convenience download of the already-rendered preview.
+- The response CSP is `default-src 'self'` with no `unsafe-inline`. Add styles
+  and scripts as files, never as an inline `<script>` or `style=` attribute.
 - Do not add server-side image generation; it grows Flask worker memory.
-- Record measured asset sizes and any performance numbers in the pull request.
+- Keep controls keyboard-operable, labelled, and visibly focusable. Do not
+  remove the default focus outline without replacing it with a visible one.
+- Note the size of any new client asset in the pull request.
 
 ## Git and pull requests
 

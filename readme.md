@@ -220,7 +220,7 @@ production; the container uses Gunicorn instead.
 
 ## Development
 
-Repository-specific architecture, testing, untrusted-input, web UX, and
+Repository-specific architecture, testing, untrusted-input, web interface, and
 contribution rules are collected in [AGENTS.md](AGENTS.md). Contributors and AI
 coding agents should read it before changing the converter, the Flask
 application, or the test fixtures.
