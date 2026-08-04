@@ -109,6 +109,7 @@ Always review the generated configuration before deployment.
 .
 |-- convert.py                          # CLI entrypoint: parses args and runs conversion
 |-- readme.md                           # Project overview, usage, CI, and development guidance
+|-- AGENTS.md                           # Contributor and AI agent guidance for this repository
 |-- requirements.txt                    # Runtime dependencies
 |-- requirements-dev.txt                # Ranged developer dependencies
 |-- requirements-dev-minimum.txt        # Exact supported dependency floors
@@ -218,6 +219,11 @@ production; the container uses Gunicorn instead.
   must still protect network access and application logs as sensitive systems.
 
 ## Development
+
+Repository-specific architecture, testing, untrusted-input, web interface, and
+contribution rules are collected in [AGENTS.md](AGENTS.md). Contributors and AI
+coding agents should read it before changing the converter, the Flask
+application, or the test fixtures.
 
 ### Runtime Dependencies
 

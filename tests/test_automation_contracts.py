@@ -4,6 +4,12 @@ import re
 from pathlib import Path
 
 ROOT = Path(__file__).parents[1]
+BACKTICKED = re.compile(r"`([^`\n]+)`")
+REPO_PATH = re.compile(
+    r"^(?:convert\.py|readme\.md|pyproject\.toml|AGENTS\.md|CHANGELOG\.md"
+    r"|requirements(?:-dev)?(?:-minimum|-latest)?\.txt"
+    r"|packages|tests|docs|scripts|docker|\.github|\.dockerignore)(?:/|$)"
+)
 RANGED_REQUIREMENT = re.compile(
     r"^(?P<name>[A-Za-z0-9][A-Za-z0-9._-]*)"
     r">=(?P<floor>[0-9]+(?:\.[0-9]+)*),"
@@ -131,6 +137,72 @@ def test_readme_unsupported_issues_match_the_support_matrix() -> None:
     matrix_issues = set(re.findall(r"#(\d+)", matrix_section))
 
     assert readme_issues == matrix_issues
+
+
+def test_agent_guidance_only_references_paths_that_exist() -> None:
+    guidance = read_repo_file("AGENTS.md")
+
+    referenced = {
+        token
+        for span in BACKTICKED.findall(guidance)
+        # A span may be a command such as "scripts/validate.sh all"; the path is
+        # its first word.
+        for token in [span.split(" ", 1)[0]]
+        if REPO_PATH.match(token)
+    }
+
+    assert referenced, "AGENTS.md must reference the repository paths it describes."
+    missing = sorted(path for path in referenced if not (ROOT / path).exists())
+    assert not missing, f"AGENTS.md references paths that no longer exist: {missing}"
+
+
+def test_agent_guidance_documents_every_module_and_script() -> None:
+    guidance = read_repo_file("AGENTS.md")
+
+    tracked = [
+        f"{path.parent.name}/{path.name}"
+        for path in sorted(
+            [*(ROOT / "packages").glob("*.py"), *(ROOT / "scripts").glob("*.sh")]
+        )
+    ]
+
+    undocumented = [path for path in tracked if path not in guidance]
+    assert not undocumented, (
+        f"AGENTS.md does not document these modules or scripts: {undocumented}"
+    )
+
+
+def test_agent_guidance_matches_the_shared_validation_entrypoints() -> None:
+    guidance = read_repo_file("AGENTS.md")
+    validate = read_repo_file("scripts/validate.sh")
+
+    for mode in ("all", "test"):
+        assert f"scripts/validate.sh {mode}" in guidance
+        assert f"\n  {mode})\n" in validate
+
+    assert "SCREENOS_MAX_CONFIG_BYTES" in read_repo_file("packages/web_app.py")
+    assert "SCREENOS_MAX_CONFIG_BYTES" in guidance
+
+
+def test_agent_guidance_carries_no_local_or_secret_material() -> None:
+    guidance = read_repo_file("AGENTS.md")
+
+    for pattern in (
+        r"/home/",
+        r"/Users/",
+        r"[A-Za-z]:\\\\",
+        r"ssh-rsa",
+        r"BEGIN [A-Z]",
+    ):
+        assert re.search(pattern, guidance) is None, (
+            f"AGENTS.md must not contain local paths or secrets: {pattern}"
+        )
+
+
+def test_contributor_checklist_prompts_an_agent_guidance_review() -> None:
+    template = read_repo_file(".github/pull_request_template.md")
+
+    assert "AGENTS.md" in template
 
 
 def test_release_publishes_only_after_validating_the_resolved_sha() -> None:
