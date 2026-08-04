@@ -23,6 +23,19 @@ It is a migration aid, not a complete device configuration translator.
   descriptions, CIDR or dotted-netmask IPv4 and IPv6 interface addresses, MTU,
   administrative state, VLAN tags, IPv4 unnumbered donors, and security-zone
   bindings.
+- Optional operator-approved interface mappings that retarget a ScreenOS
+  interface onto a chosen Junos interface, logical unit, and tagged or untagged
+  VLAN. An applied mapping rewrites every supported reference — zones, policies
+  through their zones, static routes, routing instances, MIP/DIP NAT, proxy ARP,
+  unnumbered donors, and VPN bindings — and is recorded as a comment at the top
+  of the generated configuration. Mappings are validated before conversion, and
+  conflicting destinations, dropped VLAN tags, and unusable mappings are
+  diagnosed instead of rendered. Without a mapping the default interface-name
+  strategy is unchanged.
+- An interface binding inventory that reports, for each ScreenOS interface, the
+  zones, policies, address objects, routes, routing instances, NAT rules, VPN
+  and tunnel references, unnumbered donors, and unsupported attributes that
+  depend on it, plus references to interfaces the configuration never defines.
 - Numeric zone-specific and global permit/deny/reject policies through one
   policy model, including names, ordering directives, multiline source,
   destination, and service matches, logging, and counters. Zone policies are
@@ -66,7 +79,13 @@ in the [conversion support matrix](docs/conversion-support-matrix.md).
   destination context, and extended/incoming/random/shifted DIP variants.
 - Platform-specific interface aliases outside the documented
   Ethernet/`mgt`/`tunnel.N`/`vlanN` mapping, management-interface MTU, or
-  interface attributes outside the tested support matrix.
+  interface attributes outside the tested support matrix. Interface mapping
+  destinations are limited to the documented Junos families, and one ScreenOS
+  interface maps to exactly one Junos unit.
+- The interactive interface-mapping workspace in the web page:
+  [issue 70](https://github.com/greyinghair/screenos_to_junos_converter/issues/70).
+  Approved mappings are accepted by the conversion service and the CLI today,
+  and the web page shows the interface inventory read-only.
 - IPv6, CIDR, wildcard, and address-range address-book input forms;
   non-TCP/UDP custom services; service source-port rendering; and policy
   schedules, alert logging, count alarms, or other unlisted policy options.
@@ -95,6 +114,7 @@ Always review the generated configuration before deployment.
 - `packages/converter_core.py`: conversion engine and state model
 - `packages/conversion_service.py`: request-scoped in-memory conversion API
 - `packages/conversion_models.py`: normalized interface, policy, routing, and NAT models
+- `packages/interface_inventory.py`: interface binding inventory for migration mapping
 - `packages/convert_service.py`: service parsing/conversion helpers
 - `packages/web_app.py`: Flask application factory, input validation, and routes
 - `packages/sanity_check_naming.py`: Junos-safe name normalization
@@ -129,6 +149,7 @@ Always review the generated configuration before deployment.
 |   |-- converter_core.py               # Core conversion engine and state
 |   |-- conversion_models.py            # Normalized interface, policy, routing, and NAT models
 |   |-- conversion_service.py           # Request-scoped in-memory conversion API
+|   |-- interface_inventory.py          # Interface binding inventory for migration mapping
 |   |-- convert_service.py              # Service conversion helpers
 |   |-- web_app.py                      # Flask application factory and routes
 |   |-- static/                         # Web application styles and behavior
@@ -182,15 +203,46 @@ Optional flags:
 python3 convert.py \
   --input input/netscreen_config.txt \
   --output outputs/converted_custom.txt \
+  --interface-map input/interface_map.json \
+  --interface-inventory outputs/interface_inventory.json \
   --progress-interval 500 \
   --log-level INFO
 ```
+
+`--interface-inventory` writes the interface binding inventory as JSON: for
+each ScreenOS interface, its default Junos destination and every zone, policy,
+address object, route, NAT rule, VPN reference, and unsupported attribute bound
+to it, with the source line each one came from.
+
+`--interface-map` is optional. It takes a JSON list of approved destinations
+and is validated before conversion starts; the run stops with an error rather
+than emitting partially remapped configuration:
+
+```json
+[
+  { "screenos_name": "ethernet0/0", "physical_name": "ge-0/0/9" },
+  {
+    "screenos_name": "ethernet0/1.100",
+    "physical_name": "xe-2/0/1",
+    "unit": 7,
+    "vlan_mode": "tagged",
+    "vlan_id": 100
+  }
+]
+```
+
+`unit` defaults to `0` and `vlan_mode` to `access` (untagged). An untagged
+Ethernet destination must use unit 0, and a tagged one needs a non-zero unit
+and a VLAN ID. Omitting the flag leaves the default interface-name mapping in
+place, so existing conversions are unchanged.
 
 ### Web application
 
 The Flask application uses the same in-memory conversion service as the CLI.
 It accepts either pasted configuration or one UTF-8 `.txt` upload and keeps
-submitted configuration in memory only for the duration of the request.
+submitted configuration in memory only for the duration of the request. Each
+preview also lists the interface binding inventory so an operator can see what
+depends on every interface before choosing migration destinations.
 
 For local development:
 

@@ -1,0 +1,4 @@
+1|mapping "ethernet0/1.100" to untagged ge-0/0/5.0 discards ScreenOS VLAN tag 100
+6|interface "ethernet0/3" resolves to ge-0/0/2.0, which is already used by "ethernet0/2"
+8|undefined routing interface: "ethernet0/3"
+None|approved mapping for "ethernet0/8" was not applied: the interface is not defined in the submitted configuration

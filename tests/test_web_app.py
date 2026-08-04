@@ -285,3 +285,47 @@ def test_concurrent_web_requests_do_not_share_converter_state() -> None:
 
     assert "tcp_8080" in outputs[0] and "tcp_8443" not in outputs[0]
     assert "tcp_8443" in outputs[1] and "tcp_8080" not in outputs[1]
+
+
+def test_preview_renders_the_interface_inventory_for_each_interface(client) -> None:
+    source = (
+        Path(__file__).parent / "fixtures" / "features" / "interface_inventory.screenos"
+    ).read_text(encoding="utf-8")
+
+    response = client.post(
+        "/convert",
+        data={"config_text": source, "action": "preview"},
+    )
+    body = response.get_data(as_text=True)
+
+    assert response.status_code == 200
+    assert "<summary>Interface inventory (5)</summary>" in body
+    assert (
+        "<caption>Every ScreenOS interface and the configuration bound to it</caption>"
+        in body
+    )
+    assert '<th scope="col">Junos interface</th>' in body
+    assert '<th scope="row">ethernet0/1.100</th>' in body
+    assert "ge-0/0/1.100" in body
+    assert "MIP 198.51.100.30/32 to host 192.0.2.10/32" in body
+    # An interface with nothing bound to it still gets an explicit row.
+    assert "No detected bindings" in body
+
+
+def test_preview_escapes_inventory_source_context(client) -> None:
+    source = "\n".join(
+        [
+            'set interface ethernet0/0 zone "Untrust"',
+            'set interface ethernet0/0 monitor "<script>alert(1)</script>"',
+        ]
+    )
+
+    response = client.post(
+        "/convert",
+        data={"config_text": source, "action": "preview"},
+    )
+    body = response.get_data(as_text=True)
+
+    assert response.status_code == 200
+    assert "<script>alert(1)</script>" not in body
+    assert "&lt;script&gt;alert(1)&lt;/script&gt;" in body

@@ -1,0 +1,15 @@
+[
+  {
+    "screenos_name": "ethernet0/1.100",
+    "physical_name": "xe-2/0/1",
+    "unit": 7,
+    "vlan_mode": "tagged",
+    "vlan_id": 100
+  },
+  {
+    "screenos_name": "ethernet0/0",
+    "physical_name": "ge-0/0/9",
+    "unit": 0,
+    "vlan_mode": "access"
+  }
+]

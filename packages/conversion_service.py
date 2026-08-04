@@ -2,9 +2,17 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections.abc import Iterable
+from dataclasses import dataclass, field
 
+from .conversion_models import (
+    InterfaceMappingError,
+    InterfaceMappingRequest,
+    ResolvedInterfaceMapping,
+    resolve_interface_mappings,
+)
 from .converter_core import ConversionDiagnostic, Converter
+from .interface_inventory import InterfaceInventory, build_interface_inventory
 
 
 class ConversionInputError(ValueError):
@@ -24,6 +32,10 @@ class ConversionResult:
     unsupported_count: int
     diagnostics: tuple[ConversionDiagnostic, ...]
     manual_review_warnings: tuple[str, ...]
+    interface_inventory: InterfaceInventory = field(
+        default_factory=lambda: InterfaceInventory(interfaces=(), unresolved=())
+    )
+    applied_interface_mappings: tuple[ResolvedInterfaceMapping, ...] = ()
 
 
 def _decode_source(source: str | bytes, max_bytes: int | None) -> str:
@@ -55,11 +67,26 @@ def convert_configuration(
     source: str | bytes,
     *,
     max_bytes: int | None = None,
+    interface_mappings: Iterable[InterfaceMappingRequest] | None = None,
 ) -> ConversionResult:
-    """Convert UTF-8 ScreenOS text using a fresh converter instance."""
+    """Convert UTF-8 ScreenOS text using a fresh converter instance.
+
+    Interface mappings are optional. They are validated before any conversion
+    runs, so invalid or conflicting input is rejected instead of producing
+    partially remapped configuration. Without them the converter keeps its
+    default ScreenOS-to-Junos interface-name strategy.
+    """
 
     source_text = _decode_source(source, max_bytes)
-    converter = Converter(progress_interval=9999)
+    try:
+        resolved_mappings = resolve_interface_mappings(interface_mappings or ())
+    except InterfaceMappingError as exc:
+        raise ConversionInputError(f"Invalid interface mapping: {exc}") from exc
+
+    converter = Converter(
+        progress_interval=9999,
+        interface_mappings=resolved_mappings,
+    )
     converter.read_text(source_text)
     converter.disabled_rule_cleanup()
     state = converter.state
@@ -72,4 +99,9 @@ def convert_configuration(
         unsupported_count=state.failed,
         diagnostics=tuple(state.diagnostics),
         manual_review_warnings=tuple(state.manual_review_warnings),
+        interface_inventory=build_interface_inventory(state),
+        applied_interface_mappings=tuple(
+            state.applied_interface_mappings[name]
+            for name in sorted(state.applied_interface_mappings)
+        ),
     )

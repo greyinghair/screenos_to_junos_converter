@@ -4,6 +4,22 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased
 
+- feat: inventory every ScreenOS interface binding that affects migration —
+  zones, zone policies, contained address objects, static routes, routing
+  instances, MIP/DIP NAT, VPN and tunnel references, unnumbered donors, and
+  unsupported interface attributes — keyed by the exact source-interface
+  identifier, with the source line behind each reference, an explicit empty
+  state, and references to undefined interfaces reported separately. The
+  inventory is exposed through the conversion service, the web preview, and a
+  new `--interface-inventory` CLI flag.
+- feat: apply operator-approved interface mappings when rendering Junos.
+  A validated mapping retargets a ScreenOS interface onto a chosen Junos
+  interface, unit, and untagged or tagged VLAN, and every supported reference
+  follows it. Mappings are validated before rendering, conflicting destinations
+  and dropped VLAN tags are diagnosed instead of emitted, and the applied
+  mapping is recorded in the generated configuration. Conversions without
+  mappings are byte-for-byte unchanged.
+
 - docs: add a repository-root `AGENTS.md` covering project structure, verified
   commands, architecture boundaries, testing, untrusted-input handling, the web
   interface, and contribution workflow, with automation contracts that fail when

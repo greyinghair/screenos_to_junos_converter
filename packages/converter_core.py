@@ -7,7 +7,7 @@ import logging
 import re
 import shlex
 from collections import Counter
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Final
@@ -28,6 +28,7 @@ from .conversion_models import (
     MipModel,
     PolicyModel,
     PolicyReference,
+    ResolvedInterfaceMapping,
     SourceNatRuleModel,
     StaticRouteModel,
     map_screenos_interface,
@@ -218,6 +219,9 @@ class ConversionState:
     address_group_ns_to_junos_address_set: dict[str, str] = field(default_factory=dict)
     address_and_set_dicts: dict[str, str] = field(default_factory=dict)
     address_objects_by_zone: dict[tuple[str, str], str] = field(default_factory=dict)
+    address_sources: dict[tuple[str, str], tuple[int | None, str]] = field(
+        default_factory=dict
+    )
     address_prefixes_by_zone: dict[tuple[str, str], list[str]] = field(
         default_factory=dict
     )
@@ -227,6 +231,12 @@ class ConversionState:
     interfaces: dict[str, InterfaceModel] = field(default_factory=dict)
     interface_ns_to_junos: dict[str, str] = field(default_factory=dict)
     rendered_interfaces: set[str] = field(default_factory=set)
+    interface_mappings: dict[str, ResolvedInterfaceMapping] = field(
+        default_factory=dict
+    )
+    applied_interface_mappings: dict[str, ResolvedInterfaceMapping] = field(
+        default_factory=dict
+    )
     policies: list[PolicyModel] = field(default_factory=list)
     current_policy: PolicyModel | None = None
     disabled_policy_keys: set[tuple[str, str]] = field(default_factory=set)
@@ -264,9 +274,15 @@ class ConversionState:
 class Converter:
     """Stateful converter for transforming ScreenOS lines into Junos lines."""
 
-    def __init__(self, progress_interval: int = 100) -> None:
+    def __init__(
+        self,
+        progress_interval: int = 100,
+        interface_mappings: Mapping[str, ResolvedInterfaceMapping] | None = None,
+    ) -> None:
         self.state = ConversionState()
         self.progress_interval = max(progress_interval, 1)
+        if interface_mappings:
+            self.state.interface_mappings = dict(interface_mappings)
 
     def combine_dicts(self, kind: str) -> None:
         if kind == "service":
@@ -396,12 +412,46 @@ class Converter:
         self.render_nat(ordered_policies)
         self.render_idp(ordered_policies)
         self.render_policies(ordered_policies)
+        self._annotate_applied_interface_mappings()
         self.state.diagnostics.sort(
             key=lambda diagnostic: (
                 diagnostic.line_number is None,
                 diagnostic.line_number or 0,
             )
         )
+
+    def _annotate_applied_interface_mappings(self) -> None:
+        """Record the applied mappings in the output and diagnose unused ones.
+
+        The annotations are Junos comment lines rather than configuration, so
+        they are not counted as converted input. They lead the generated
+        configuration to keep a downloaded file self-describing.
+        """
+
+        for screenos_name, approved in self.state.interface_mappings.items():
+            if screenos_name in self.state.applied_interface_mappings:
+                continue
+            if screenos_name in self.state.interfaces:
+                # The interface exists but did not render. Whatever stopped it
+                # already carries its own line-specific diagnostic.
+                continue
+            self.record_failure(
+                f"interface mapping {screenos_name} -> {approved.summary}",
+                (
+                    f'approved mapping for "{screenos_name}" was not applied: the '
+                    "interface is not defined in the submitted configuration"
+                ),
+                None,
+            )
+
+        applied = self.state.applied_interface_mappings
+        if not applied:
+            return
+        annotations = [
+            f"# Applied interface mapping: {screenos_name} -> {applied[screenos_name].summary}"
+            for screenos_name in sorted(applied)
+        ]
+        self.state.converted_config[0:0] = annotations
 
     def _parse_service_line(self, line: str, line_number: int | None = None) -> None:
         try:
@@ -619,6 +669,10 @@ class Converter:
         self.state.address_objects_by_zone[(zone.lower(), ns_address)] = (
             junos_address_name
         )
+        self.state.address_sources[(zone.lower(), ns_address)] = (
+            line_number,
+            original_line,
+        )
         self.state.address_prefixes_by_zone[(zone.lower(), ns_address)] = (
             [normalized_prefix] if normalized_prefix is not None else []
         )
@@ -705,10 +759,16 @@ class Converter:
 
         screenos_name = tokens[2]
         try:
-            mapping = map_screenos_interface(screenos_name)
+            default_mapping = map_screenos_interface(screenos_name)
         except ValueError as exc:
             self.record_failure(line, str(exc), line_number)
             return
+
+        # An approved mapping replaces the default destination for this source
+        # interface. Every downstream reference resolves through the model and
+        # `interface_ns_to_junos`, so overriding here rewrites them all.
+        approved = self.state.interface_mappings.get(screenos_name)
+        mapping = approved.mapping if approved is not None else default_mapping
 
         model = self.state.interfaces.get(screenos_name)
         if model is None:
@@ -717,7 +777,12 @@ class Converter:
                 mapping=mapping,
                 line_number=line_number,
                 source_line=line,
-                zone=("System-Management" if mapping.kind == "management" else None),
+                zone=(
+                    "System-Management"
+                    if default_mapping.kind == "management"
+                    else None
+                ),
+                applied_mapping=approved,
             )
             self.state.interfaces[screenos_name] = model
             self.state.interface_ns_to_junos[screenos_name] = mapping.logical_name
@@ -764,7 +829,7 @@ class Converter:
         for group in attribute_groups:
             if not self._apply_interface_attribute(
                 model,
-                mapping,
+                default_mapping,
                 group,
                 line,
                 line_number,
@@ -776,19 +841,28 @@ class Converter:
     def _apply_interface_attribute(
         self,
         model: InterfaceModel,
-        mapping: InterfaceMapping,
+        source_mapping: InterfaceMapping,
         attributes: list[str],
         line: str,
         line_number: int,
     ) -> bool:
-        """Apply one validated interface attribute group to the model."""
+        """Apply one validated interface attribute group to the model.
 
+        `source_mapping` describes the ScreenOS interface form, so attribute
+        validation stays tied to the submitted configuration. Destination
+        portability is checked against `model.mapping`, which an approved
+        interface mapping may have replaced.
+        """
+
+        source = (line_number, line)
         if len(attributes) == 2 and attributes[0].lower() == "zone":
             model.zone = self.remember_zone(attributes[1])
+            model.attribute_sources["zone"] = source
         elif len(attributes) == 2 and attributes[0].lower() == "description":
             model.description = attributes[1]
+            model.attribute_sources["description"] = source
         elif len(attributes) == 2 and attributes[0].lower() == "mtu":
-            if mapping.kind == "management":
+            if model.mapping.kind == "management":
                 self.record_failure(
                     line,
                     "management-interface MTU is not portable to Junos fxp0",
@@ -807,6 +881,7 @@ class Converter:
                 )
                 return False
             model.mtu = mtu
+            model.attribute_sources["mtu"] = source
         elif len(attributes) == 2 and attributes[0].lower() == "tag":
             try:
                 vlan_id = int(attributes[1])
@@ -819,8 +894,8 @@ class Converter:
                     line_number,
                 )
                 return False
-            if mapping.kind not in ("ethernet", "vlan") or (
-                mapping.kind == "ethernet" and mapping.unit == 0
+            if source_mapping.kind not in ("ethernet", "vlan") or (
+                source_mapping.kind == "ethernet" and source_mapping.unit == 0
             ):
                 self.record_failure(
                     line,
@@ -829,12 +904,14 @@ class Converter:
                 )
                 return False
             model.vlan_id = vlan_id
+            model.attribute_sources["tag"] = source
         elif (
             len(attributes) == 2
             and attributes[0].lower() == "phy"
             and attributes[1].lower() == "link-down"
         ):
             model.disabled = True
+            model.attribute_sources["phy"] = source
         elif len(attributes) == 2 and attributes[0].lower() == "ip":
             try:
                 address = ipaddress.ip_interface(attributes[1])
@@ -855,6 +932,7 @@ class Converter:
             normalized = str(address)
             if normalized not in model.ipv4_addresses:
                 model.ipv4_addresses.append(normalized)
+            model.attribute_sources[f"ip:{normalized}"] = source
         elif (
             len(attributes) == 3
             and attributes[0].lower() == "ip"
@@ -883,6 +961,7 @@ class Converter:
             normalized = str(address)
             if normalized not in model.ipv4_addresses:
                 model.ipv4_addresses.append(normalized)
+            model.attribute_sources[f"ip:{normalized}"] = source
         elif (
             len(attributes) == 4
             and attributes[0].lower() == "ip"
@@ -892,6 +971,7 @@ class Converter:
             model.unnumbered_from = attributes[3]
             model.unnumbered_line_number = line_number
             model.unnumbered_source_line = line
+            model.attribute_sources["unnumbered"] = source
         elif (
             len(attributes) == 3
             and attributes[0].lower() == "ipv6"
@@ -916,6 +996,7 @@ class Converter:
             normalized = str(address)
             if normalized not in model.ipv6_addresses:
                 model.ipv6_addresses.append(normalized)
+            model.attribute_sources[f"ipv6:{normalized}"] = source
         else:
             self.record_failure(
                 line,
@@ -1098,19 +1179,70 @@ class Converter:
             source_line=line,
         )
 
+    def _validate_mapped_interface(self, model: InterfaceModel) -> bool:
+        """Diagnose what an approved mapping would change about a source VLAN."""
+
+        approved = model.applied_mapping
+        if approved is None:
+            return True
+
+        tag_line_number, tag_line = model.attribute_sources.get(
+            "tag",
+            (model.line_number, model.source_line),
+        )
+        if approved.vlan_mode == "access" and model.vlan_id is not None:
+            self.record_failure(
+                tag_line,
+                (
+                    f'mapping "{model.screenos_name}" to untagged '
+                    f"{approved.logical_name} discards ScreenOS VLAN tag "
+                    f"{model.vlan_id}"
+                ),
+                tag_line_number,
+            )
+            return False
+        if (
+            approved.vlan_mode == "tagged"
+            and model.vlan_id is not None
+            and model.vlan_id != approved.vlan_id
+        ):
+            self._manual_review(
+                f'interface "{model.screenos_name}" is retagged from ScreenOS VLAN '
+                f"{model.vlan_id} to VLAN {approved.vlan_id} on "
+                f"{approved.logical_name}; confirm the adjacent switch port"
+            )
+        return True
+
     def render_interfaces(self) -> None:
         renderable: dict[str, InterfaceModel] = {}
+        claimed_units: dict[tuple[str, int], str] = {}
         for name, model in self.state.interfaces.items():
             if not model.configured:
                 continue
             if (
-                model.mapping.kind == "ethernet"
+                model.applied_mapping is None
+                and model.mapping.kind == "ethernet"
                 and model.mapping.unit != 0
                 and model.vlan_id is None
             ):
                 self.record_failure(
                     model.source_line,
                     (f'ethernet subinterface "{name}" requires an explicit VLAN tag'),
+                    model.line_number,
+                )
+                continue
+            if not self._validate_mapped_interface(model):
+                continue
+            destination = (model.mapping.physical_name, model.mapping.unit)
+            owner = claimed_units.get(destination)
+            if owner is not None:
+                self.record_failure(
+                    model.source_line,
+                    (
+                        f'interface "{name}" resolves to '
+                        f"{model.mapping.logical_name}, which is already used by "
+                        f'"{owner}"'
+                    ),
                     model.line_number,
                 )
                 continue
@@ -1121,6 +1253,7 @@ class Converter:
                     model.unnumbered_line_number or model.line_number,
                 )
                 continue
+            claimed_units[destination] = name
             renderable[name] = model
 
         for name, model in list(renderable.items()):
@@ -1150,9 +1283,9 @@ class Converter:
                 if physical not in tagged_physical_interfaces:
                     self.convert_config(f"set interfaces {physical} vlan-tagging")
                     tagged_physical_interfaces.add(physical)
-                self.convert_config(f"{unit_prefix} vlan-id {model.vlan_id}")
+                self.convert_config(f"{unit_prefix} vlan-id {model.effective_vlan_id}")
             elif mapping.kind == "vlan":
-                vlan_id = model.vlan_id or mapping.unit
+                vlan_id = model.effective_vlan_id or mapping.unit
                 vlan_name = f"screenos_vlan_{vlan_id}"
                 self.convert_config(f"set vlans {vlan_name} vlan-id {vlan_id}")
                 self.convert_config(
@@ -1230,6 +1363,10 @@ class Converter:
                 for output_line in self.state.converted_config[output_start:]
             ):
                 self.state.rendered_interfaces.add(model.screenos_name)
+                if model.applied_mapping is not None:
+                    self.state.applied_interface_mappings[model.screenos_name] = (
+                        model.applied_mapping
+                    )
 
     @staticmethod
     def junos_vrouter_name(vrouter: str) -> str | None:

@@ -79,6 +79,71 @@
             </details>
           {% endif %}
 
+          {% if result.applied_interface_mappings %}
+            <details>
+              <summary>Applied interface mappings ({{ result.applied_interface_mappings|length }})</summary>
+              <ul>
+                {% for applied in result.applied_interface_mappings %}
+                  <li>{{ applied.screenos_name }} &rarr; {{ applied.summary }}</li>
+                {% endfor %}
+              </ul>
+            </details>
+          {% endif %}
+
+          {% if result.interface_inventory.interfaces %}
+            <details>
+              <summary>Interface inventory ({{ result.interface_inventory.interfaces|length }})</summary>
+              <table class="inventory">
+                <caption>Every ScreenOS interface and the configuration bound to it</caption>
+                <thead>
+                  <tr>
+                    <th scope="col">ScreenOS interface</th>
+                    <th scope="col">Junos interface</th>
+                    <th scope="col">Zone</th>
+                    <th scope="col">Bindings</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {% for entry in result.interface_inventory.interfaces %}
+                    <tr>
+                      <th scope="row">{{ entry.screenos_name }}</th>
+                      <td>{{ entry.junos_name }}</td>
+                      <td>{{ entry.zone or "unbound" }}</td>
+                      <td>
+                        {% if entry.has_bindings %}
+                          <ul>
+                            {% for binding in entry.bindings %}
+                              <li>
+                                <span class="tag">{{ binding.category }}</span>
+                                {% if binding.line_number %}Line {{ binding.line_number }}: {% endif %}
+                                {{ binding.summary }}
+                              </li>
+                            {% endfor %}
+                          </ul>
+                        {% else %}
+                          No detected bindings
+                        {% endif %}
+                      </td>
+                    </tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+
+              {% if result.interface_inventory.unresolved %}
+                <h3>Unresolved interface references</h3>
+                <ul>
+                  {% for reference in result.interface_inventory.unresolved %}
+                    <li>
+                      {{ reference.screenos_name }} &mdash;
+                      {% if reference.line_number %}Line {{ reference.line_number }}: {% endif %}
+                      {{ reference.summary }}
+                    </li>
+                  {% endfor %}
+                </ul>
+              {% endif %}
+            </details>
+          {% endif %}
+
           <label for="converted_output">Converted output</label>
           <textarea id="converted_output" rows="20" readonly spellcheck="false">{{ result.output }}</textarea>
         </section>
