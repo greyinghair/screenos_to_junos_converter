@@ -1,0 +1,18 @@
+{
+  "mapping-count": "3",
+  "mapping-source-0": "ethernet0/0",
+  "mapping-destination-0": "ge-0/0/9",
+  "mapping-unit-0": "0",
+  "mapping-vlan-0": "untagged",
+  "mapping-vlan_id-0": "",
+  "mapping-source-1": "ethernet0/1.100",
+  "mapping-destination-1": "xe-2/0/1",
+  "mapping-unit-1": "7",
+  "mapping-vlan-1": "preserve",
+  "mapping-vlan_id-1": "100",
+  "mapping-source-2": "tunnel.1",
+  "mapping-destination-2": "st0",
+  "mapping-unit-2": "5",
+  "mapping-vlan-2": "preserve",
+  "mapping-vlan_id-2": ""
+}

@@ -63,6 +63,17 @@ def _decode_source(source: str | bytes, max_bytes: int | None) -> str:
     return text
 
 
+def decode_configuration(source: str | bytes, *, max_bytes: int | None = None) -> str:
+    """Validate submitted configuration text without converting it.
+
+    Front ends that echo a submitted configuration back to the user decode it
+    once, here, so the size and control-byte rules a conversion enforces are
+    applied before the text reaches a template or a second conversion pass.
+    """
+
+    return _decode_source(source, max_bytes)
+
+
 def convert_configuration(
     source: str | bytes,
     *,

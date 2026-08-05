@@ -10,6 +10,7 @@ from packages.conversion_models import (
     InterfaceMappingError,
     InterfaceMappingRequest,
     resolve_interface_mappings,
+    review_interface_mappings,
 )
 from packages.conversion_service import ConversionInputError, convert_configuration
 from packages.converter_core import Converter
@@ -289,3 +290,53 @@ def test_service_reports_the_applied_mapping_for_downloads() -> None:
     assert result.output.startswith(
         "# Applied interface mapping: ethernet0/0 -> ge-0/0/9.0 (untagged)\n"
     )
+
+
+def test_review_reports_every_rejected_request_without_cascading() -> None:
+    review = review_interface_mappings(
+        [
+            InterfaceMappingRequest("ethernet0/0", "ge-0/0/1"),
+            InterfaceMappingRequest("serial0/0", "ge-0/0/3"),
+            InterfaceMappingRequest("ethernet0/2", "ge-0/0/1"),
+            InterfaceMappingRequest(
+                "ethernet0/3", "ge-0/0/4", unit=4, vlan_mode="tagged"
+            ),
+            InterfaceMappingRequest("ethernet0/4", "ge-0/0/5"),
+        ]
+    )
+
+    assert [(issue.index, issue.field) for issue in review.issues] == [
+        (1, "screenos_name"),
+        (2, "physical_name"),
+        (3, "vlan_id"),
+    ]
+    assert review.is_valid is False
+    # A rejected request never claims a destination, so the requests around it
+    # still resolve.
+    assert sorted(review.mappings) == ["ethernet0/0", "ethernet0/4"]
+
+
+def test_review_and_resolve_agree_on_the_first_rejection() -> None:
+    requests = [
+        InterfaceMappingRequest("ethernet0/0", "ge-0/0/1"),
+        InterfaceMappingRequest("ethernet0/0", "ge-0/0/2"),
+    ]
+
+    review = review_interface_mappings(requests)
+    with pytest.raises(InterfaceMappingError) as error:
+        resolve_interface_mappings(requests)
+
+    assert review.issues[0].message == str(error.value)
+    assert review.issues[0].screenos_name == "ethernet0/0"
+
+
+def test_a_valid_review_resolves_exactly_like_the_raising_resolver() -> None:
+    requests = load_requests(
+        FIXTURE_ROOT / "features" / "interface_mapping.mappings.json"
+    )
+
+    review = review_interface_mappings(requests)
+
+    assert review.is_valid
+    assert review.issues == ()
+    assert review.mappings == resolve_interface_mappings(requests)

@@ -1,0 +1,20 @@
+{# Conversion flow graphic. Its state is rendered by the server, so the
+   graphic is correct without JavaScript and stays a text-equivalent list. #}
+<section class="flow" aria-labelledby="flow-heading" data-flow>
+  <h2 id="flow-heading" class="visually-hidden">Conversion progress</h2>
+  <ol class="flow-steps">
+    {% for step in flow %}
+      <li class="flow-step is-{{ step.status }}">
+        <span class="flow-mark">
+          <svg class="icon" aria-hidden="true"><use href="#icon-{{ step.icon }}" /></svg>
+        </span>
+        <span class="flow-body">
+          <span class="flow-label">{{ loop.index }}. {{ step.label }}</span>
+          <span class="flow-status">{{ step.status_label }}</span>
+          <span class="flow-detail">{{ step.detail }}</span>
+        </span>
+      </li>
+    {% endfor %}
+  </ol>
+  <p class="flow-working" data-flow-working hidden>Converting the submitted configuration&hellip;</p>
+</section>

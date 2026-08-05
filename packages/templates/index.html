@@ -4,25 +4,41 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>ScreenOS to Junos Converter</title>
+    <link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='icon.svg') }}">
+    <link rel="apple-touch-icon" href="{{ url_for('static', filename='icon.svg') }}">
     <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
     <script src="{{ url_for('static', filename='app.js') }}" defer></script>
   </head>
   <body>
+    {% include "partials/icons.html" %}
     <main class="shell">
-      <header>
-        <p class="eyebrow">Migration utility</p>
-        <h1>ScreenOS to Junos Converter</h1>
-        <p>Paste a ScreenOS configuration or upload one UTF-8 <code>.txt</code> file.</p>
+      <header class="masthead">
+        <img class="brand" src="{{ url_for('static', filename='icon.svg') }}" alt="" width="56" height="56">
+        <div>
+          <p class="eyebrow">Migration utility</p>
+          <h1>ScreenOS to Junos Converter</h1>
+          <p>Paste a ScreenOS configuration or upload one UTF-8 <code>.txt</code> file.</p>
+        </div>
       </header>
 
+      {% include "partials/flow.html" %}
+
       {% if error %}
-        <div class="notice error" role="alert">{{ error }}</div>
+        <div class="notice error" role="alert">
+          <svg class="icon" aria-hidden="true"><use href="#icon-warning" /></svg>
+          {{ error }}
+        </div>
       {% endif %}
 
-      <form action="{{ url_for('convert') }}" method="post" enctype="multipart/form-data">
+      <form id="conversion-form" action="{{ url_for('convert') }}" method="post"
+        enctype="multipart/form-data" data-conversion-form>
+        <p class="eyebrow">Step 1 of 3</p>
+        <h2>ScreenOS input</h2>
+
         <label for="config_text">Paste configuration</label>
         <textarea id="config_text" name="config_text" rows="14" spellcheck="false"
-          placeholder='set address "Trust" "SERVER" 192.0.2.10 255.255.255.255'></textarea>
+          placeholder='set address "Trust" "SERVER" 192.0.2.10 255.255.255.255'>
+{{ config_text }}</textarea>
 
         <div class="separator" aria-hidden="true">or</div>
 
@@ -30,123 +46,29 @@
         <input id="config_file" name="config_file" type="file" accept=".txt,text/plain">
         <p class="hint">Maximum configuration size: {{ max_config_bytes }} bytes.</p>
 
+        {% if workspace %}
+          {% include "partials/workspace.html" %}
+        {% endif %}
+
         <div class="actions">
-          <button type="submit" name="action" value="preview">Convert and preview</button>
-          <button class="secondary" type="submit" name="action" value="download">
+          <button type="submit" name="action" value="map" data-action-map>
+            <svg class="icon" aria-hidden="true"><use href="#icon-search" /></svg>
+            Review interface mappings
+          </button>
+          <button class="secondary" type="submit" name="action" value="preview" data-action-convert>
+            Convert and preview
+          </button>
+          <button class="secondary" type="submit" name="action" value="download" data-action-convert>
             Convert and download
           </button>
         </div>
+        <p class="hint" data-conversion-blocked hidden role="status">
+          Correct the highlighted interface mappings to enable conversion.
+        </p>
       </form>
 
       {% if result %}
-        <section class="result" aria-labelledby="result-heading">
-          <div class="result-header">
-            <div>
-              <p class="eyebrow">Conversion result</p>
-              <h2 id="result-heading">Generated Junos configuration</h2>
-            </div>
-            <button id="download-preview" class="secondary" type="button"
-              data-download-name="{{ download_name }}">Download preview</button>
-          </div>
-
-          <dl class="metrics">
-            <div><dt>Emitted lines</dt><dd>{{ result.converted_count }}</dd></div>
-            <div><dt>Unsupported lines</dt><dd>{{ result.unsupported_count }}</dd></div>
-          </dl>
-
-          {% if result.manual_review_warnings %}
-            <div class="notice warning">
-              <strong>Manual review required</strong>
-              <ul>
-                {% for warning in result.manual_review_warnings %}
-                  <li>{{ warning }}</li>
-                {% endfor %}
-              </ul>
-            </div>
-          {% endif %}
-
-          {% if result.diagnostics %}
-            <details>
-              <summary>Unsupported-line diagnostics ({{ result.unsupported_count }})</summary>
-              <ol>
-                {% for diagnostic in result.diagnostics %}
-                  <li>
-                    {% if diagnostic.line_number %}Line {{ diagnostic.line_number }}: {% endif %}
-                    {{ diagnostic.reason }}
-                  </li>
-                {% endfor %}
-              </ol>
-            </details>
-          {% endif %}
-
-          {% if result.applied_interface_mappings %}
-            <details>
-              <summary>Applied interface mappings ({{ result.applied_interface_mappings|length }})</summary>
-              <ul>
-                {% for applied in result.applied_interface_mappings %}
-                  <li>{{ applied.screenos_name }} &rarr; {{ applied.summary }}</li>
-                {% endfor %}
-              </ul>
-            </details>
-          {% endif %}
-
-          {% if result.interface_inventory.interfaces %}
-            <details>
-              <summary>Interface inventory ({{ result.interface_inventory.interfaces|length }})</summary>
-              <table class="inventory">
-                <caption>Every ScreenOS interface and the configuration bound to it</caption>
-                <thead>
-                  <tr>
-                    <th scope="col">ScreenOS interface</th>
-                    <th scope="col">Junos interface</th>
-                    <th scope="col">Zone</th>
-                    <th scope="col">Bindings</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {% for entry in result.interface_inventory.interfaces %}
-                    <tr>
-                      <th scope="row">{{ entry.screenos_name }}</th>
-                      <td>{{ entry.junos_name }}</td>
-                      <td>{{ entry.zone or "unbound" }}</td>
-                      <td>
-                        {% if entry.has_bindings %}
-                          <ul>
-                            {% for binding in entry.bindings %}
-                              <li>
-                                <span class="tag">{{ binding.category }}</span>
-                                {% if binding.line_number %}Line {{ binding.line_number }}: {% endif %}
-                                {{ binding.summary }}
-                              </li>
-                            {% endfor %}
-                          </ul>
-                        {% else %}
-                          No detected bindings
-                        {% endif %}
-                      </td>
-                    </tr>
-                  {% endfor %}
-                </tbody>
-              </table>
-
-              {% if result.interface_inventory.unresolved %}
-                <h3>Unresolved interface references</h3>
-                <ul>
-                  {% for reference in result.interface_inventory.unresolved %}
-                    <li>
-                      {{ reference.screenos_name }} &mdash;
-                      {% if reference.line_number %}Line {{ reference.line_number }}: {% endif %}
-                      {{ reference.summary }}
-                    </li>
-                  {% endfor %}
-                </ul>
-              {% endif %}
-            </details>
-          {% endif %}
-
-          <label for="converted_output">Converted output</label>
-          <textarea id="converted_output" rows="20" readonly spellcheck="false">{{ result.output }}</textarea>
-        </section>
+        {% include "partials/result.html" %}
       {% endif %}
     </main>
   </body>

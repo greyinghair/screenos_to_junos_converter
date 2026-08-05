@@ -1,0 +1,3 @@
+ethernet0/0 -> ge-0/0/9.0 (untagged)
+ethernet0/1.100 -> xe-2/0/1.7 (tagged, vlan-id 100)
+tunnel.1 -> st0.5 (untagged)

@@ -26,6 +26,7 @@ line-numbered diagnostic.
 | `packages/converter_core.py` | ScreenOS parsing, `ConversionState`, and Junos rendering. The engine. |
 | `packages/conversion_models.py` | Normalized interface, policy, routing, NAT, BGP, IPsec, and IDP records shared by parsers and renderers. Also owns `map_screenos_interface` and `resolve_interface_mappings`. |
 | `packages/interface_inventory.py` | Read-only interface binding inventory built from a finished `ConversionState`. Derives records only from normalized models and diagnostics. |
+| `packages/mapping_workspace.py` | Web mapping-workspace state: one row per discovered interface, untrusted form parsing, per-field errors, and the server-rendered conversion-flow steps. No conversion or parsing of its own. |
 | `packages/conversion_service.py` | Request-scoped API: decode, size/control-byte validation, one fresh `Converter` per call, immutable `ConversionResult`. |
 | `packages/convert_service.py` | ScreenOS *service* (application) parsing helpers. |
 | `packages/web_app.py` | Flask application factory, request validation, security headers, routes. |
@@ -95,6 +96,17 @@ If you add or rename a tracked top-level file, regenerate the README tree with
 - The interface inventory is derived, not parsed. `build_interface_inventory`
   reads finished models and diagnostics; it must never re-read configuration
   text or infer a binding that no parsed object supports.
+- The mapping workspace is derived too. `packages/mapping_workspace.py` turns a
+  finished inventory plus submitted form values into rows, and delegates every
+  mapping rule to `review_interface_mappings`. Do not add a second copy of a
+  validation rule there so the browser can show a friendlier message: add the
+  field attribution to the issue in `packages/conversion_models.py` instead.
+  `resolve_interface_mappings` stays the raising wrapper around that review, so
+  the CLI mapping file and the web form are validated identically.
+- A submission that carries mapping choices converts twice: once to discover
+  the interfaces the choices are resolved against, once to render the approved
+  output. A submission without them converts once. Keep it that way; do not
+  cache a conversion between requests to avoid the second pass.
 - Do not duplicate ScreenOS parsing in browser code. `packages/static/app.js`
   is limited to presentation; all conversion happens server-side through
   `convert_configuration`.
@@ -132,6 +144,13 @@ If you add or rename a tracked top-level file, regenerate the README tree with
   rejection paths and status codes, escaping of generated output, and
   per-request converter isolation. Web changes need a request-level test, not
   only a service-level one.
+- Mapping-workspace state — row construction, submitted-form parsing, per-field
+  errors, and flow-step status — belongs in `tests/test_mapping_workspace.py`.
+  A workspace fixture pairs a `.screenos` source with a `.form.json` submission,
+  and its negative variant lists the expected `index|field|message` errors.
+- Client assets are contract-tested in `tests/test_web_assets.py`: the
+  compressed asset budget, reduced motion, light/dark tokens, responsive rules,
+  and that every icon a template or module names exists in the sprite.
 - Accessible names, labels, and keyboard operation for new UI must be asserted
   in the rendered template, not left to manual review.
 - Large-configuration behavior must stay linear-ish and bounded. Do not add
@@ -168,20 +187,44 @@ possibly hostile. Treat them accordingly.
 
 ## Web interface
 
-The interface is server-rendered Jinja plus two small static files,
-`packages/static/styles.css` and `packages/static/app.js`. Keep it that shape.
+The interface is server-rendered Jinja plus three small static files,
+`packages/static/styles.css`, `packages/static/app.js`, and
+`packages/static/icon.svg`. Keep it that shape.
 
+- The page is one form in three server-rendered stages: ScreenOS input, the
+  interface mapping workspace, and the generated output. The submitted
+  configuration travels in the form's own textarea, so nothing is stored
+  between requests and the choices survive a validation error.
+- Templates live in `packages/templates/`, with the flow graphic, icon sprite,
+  workspace, and result in `partials/`.
 - No frontend framework, bundler, or client-side dependency. Enhancements are
   plain CSS and small vanilla JavaScript served from `packages/static/`.
 - The interface must stay fully usable with JavaScript disabled. Conversion,
-  preview, diagnostics, and download are server-side; the only script is a
-  convenience download of the already-rendered preview.
+  preview, mapping validation, diagnostics, and download are server-side. The
+  script only downloads the rendered preview, toggles the VLAN-ID requirement,
+  keeps the mapped/invalid counters live, and disables the convert buttons
+  while the browser reports an invalid control. Never render a disabled
+  convert button server-side: without a script nothing would re-enable it.
 - The response CSP is `default-src 'self'` with no `unsafe-inline`. Add styles
   and scripts as files, never as an inline `<script>` or `style=` attribute.
+- Icons are `<symbol>` definitions in `partials/icons.html`, referenced with
+  `<use href="#icon-NAME">`. They are inlined because external `<use>` targets
+  are not portable. Every icon is decorative and `aria-hidden`; the text beside
+  it carries the meaning, and no state is signalled by colour alone.
 - Do not add server-side image generation; it grows Flask worker memory.
+- Animation is limited to `transform` and `opacity`, respects
+  `prefers-reduced-motion`, and never runs while idle. The single repeating
+  animation is the in-flight indicator, which is hidden until submit and paused
+  when the tab is hidden. No polling and no timers.
+- Keep the page bounded for large configurations: `MAX_WORKSPACE_ROWS` caps the
+  rendered and parsed rows, `DETAILED_ROW_LIMIT` collapses per-row binding
+  lists, and `MAX_ROW_BINDINGS` caps each list. Every cap explains itself on
+  the page rather than silently hiding data.
 - Keep controls keyboard-operable, labelled, and visibly focusable. Do not
   remove the default focus outline without replacing it with a visible one.
-- Note the size of any new client asset in the pull request.
+- First-party client assets have a 100 KB gzip budget asserted by
+  `tests/test_web_assets.py`. Note the size of any new client asset in the pull
+  request.
 
 ## Git and pull requests
 

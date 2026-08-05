@@ -12,7 +12,7 @@ source = ["."]
 omit = ["tests/*", "venv/*"]
 
 [tool.coverage.report]
-fail_under = 43
+fail_under = 70
 show_missing = true
 skip_covered = false
 

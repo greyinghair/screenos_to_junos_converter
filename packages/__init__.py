@@ -11,7 +11,9 @@ from .conversion_models import (
     IkeProposalModel,
     InterfaceMapping,
     InterfaceMappingError,
+    InterfaceMappingIssue,
     InterfaceMappingRequest,
+    InterfaceMappingReview,
     InterfaceModel,
     IpsecProposalModel,
     IpsecVpnModel,
@@ -24,12 +26,14 @@ from .conversion_models import (
     junos_interface_kind,
     map_screenos_interface,
     resolve_interface_mappings,
+    review_interface_mappings,
 )
 from .conversion_service import (
     ConfigurationTooLarge,
     ConversionInputError,
     ConversionResult,
     convert_configuration,
+    decode_configuration,
 )
 from .convert_service import convert_service_in_file
 from .converter_core import ConversionState, Converter
@@ -39,6 +43,15 @@ from .interface_inventory import (
     InterfaceInventoryEntry,
     UnresolvedInterfaceReference,
     build_interface_inventory,
+)
+from .mapping_workspace import (
+    FlowStep,
+    MappingRow,
+    MappingSelection,
+    MappingWorkspace,
+    build_workspace,
+    conversion_flow,
+    parse_mapping_form,
 )
 from .sanity_check_naming import sanity_check_naming
 
@@ -53,6 +66,7 @@ __all__ = [
     "ConversionState",
     "Converter",
     "DipPoolModel",
+    "FlowStep",
     "IdpRuleModel",
     "IkeGatewayModel",
     "IkeProposalModel",
@@ -61,10 +75,15 @@ __all__ = [
     "InterfaceInventoryEntry",
     "InterfaceMapping",
     "InterfaceMappingError",
+    "InterfaceMappingIssue",
     "InterfaceMappingRequest",
+    "InterfaceMappingReview",
     "InterfaceModel",
     "IpsecProposalModel",
     "IpsecVpnModel",
+    "MappingRow",
+    "MappingSelection",
+    "MappingWorkspace",
     "MipModel",
     "PolicyModel",
     "PolicyReference",
@@ -73,10 +92,15 @@ __all__ = [
     "StaticRouteModel",
     "UnresolvedInterfaceReference",
     "build_interface_inventory",
+    "build_workspace",
+    "conversion_flow",
     "convert_configuration",
     "convert_service_in_file",
+    "decode_configuration",
     "junos_interface_kind",
     "map_screenos_interface",
+    "parse_mapping_form",
     "resolve_interface_mappings",
+    "review_interface_mappings",
     "sanity_check_naming",
 ]

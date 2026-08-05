@@ -1,0 +1,190 @@
+{# Interface-mapping workspace. Every control is server-rendered inside the
+   conversion form, so the submitted configuration and the approved mapping
+   travel together and nothing is stored between requests. #}
+<section class="workspace" aria-labelledby="workspace-heading" data-workspace
+  {% if not workspace.is_valid %}data-blocks-conversion="true"{% endif %}>
+  <p class="eyebrow">Step 2 of 3</p>
+  <h2 id="workspace-heading">Interface mapping workspace</h2>
+  <p class="hint">
+    Every discovered ScreenOS interface is listed with the configuration bound to it.
+    Choose a Junos SRX destination to remap an interface, or leave the destination
+    empty to keep the converter default shown on the card.
+  </p>
+
+  <input type="hidden" name="mapping-count" value="{{ workspace.total }}">
+
+  {% for notice in workspace.notices %}
+    <div class="notice warning">
+      <svg class="icon" aria-hidden="true"><use href="#icon-warning" /></svg>
+      {{ notice }}
+    </div>
+  {% endfor %}
+
+  {% if workspace.is_empty %}
+    <p class="empty-state" data-workspace-empty>
+      <svg class="icon" aria-hidden="true"><use href="#icon-search" /></svg>
+      No interfaces were discovered in this configuration, so there is nothing to map.
+      Conversion still runs on everything else the file contains.
+    </p>
+  {% else %}
+    <dl class="metrics compact" data-workspace-summary>
+      <div><dt>Discovered interfaces</dt><dd>{{ workspace.total }}</dd></div>
+      <div><dt>Remapped</dt><dd data-count-mapped>{{ workspace.mapped_count }}</dd></div>
+      <div><dt>Needs attention</dt><dd data-count-invalid>{{ workspace.invalid_count }}</dd></div>
+    </dl>
+
+    <datalist id="junos-interface-options">
+      {% for name in workspace.suggestions %}
+        <option value="{{ name }}"></option>
+      {% endfor %}
+    </datalist>
+
+    <ul class="mapping-list">
+      {% for row in workspace.rows %}
+        <li class="mapping-card is-{{ row.status }}" data-mapping-row>
+          <input type="hidden" name="{{ row.field('source') }}" value="{{ row.screenos_name }}">
+          <fieldset>
+            <legend class="mapping-heading">
+              <span class="mapping-name">{{ row.screenos_name }}</span>
+              <span class="badge badge-{{ row.status }}" data-row-status>
+                <svg class="icon" aria-hidden="true">
+                  <use href="#icon-{% if row.status == 'invalid' %}warning{% elif row.status == 'mapped' %}check{% else %}interface{% endif %}" />
+                </svg>
+                {{ row.status_label }}
+              </span>
+            </legend>
+
+            <dl class="facts">
+              <div><dt>Current Junos target</dt><dd>{{ row.current_target }}</dd></div>
+              <div><dt>Zone</dt><dd>{{ row.zone }}</dd></div>
+              <div>
+                <dt>Source VLAN</dt>
+                <dd>{% if row.source_vlan_id %}tag {{ row.source_vlan_id }}{% else %}untagged{% endif %}</dd>
+              </div>
+              {% if row.addresses %}
+                <div><dt>Addresses</dt><dd>{{ row.addresses | join(", ") }}</dd></div>
+              {% endif %}
+            </dl>
+
+            {% if row.binding_chips %}
+              <ul class="chips">
+                {% for category, count, icon, label in row.binding_chips %}
+                  <li class="chip">
+                    <svg class="icon" aria-hidden="true"><use href="#icon-{{ icon }}" /></svg>
+                    {{ label }}
+                  </li>
+                {% endfor %}
+              </ul>
+            {% endif %}
+
+            {% if row.visible_bindings %}
+              <details class="bindings">
+                <summary>Discovered bindings ({{ row.binding_total }})</summary>
+                <ul>
+                  {% for binding in row.visible_bindings %}
+                    <li>
+                      <span class="tag">{{ binding.category }}</span>
+                      {% if binding.line_number %}Line {{ binding.line_number }}: {% endif %}
+                      {{ binding.summary }}
+                    </li>
+                  {% endfor %}
+                </ul>
+                {% if row.hidden_binding_count %}
+                  <p class="hint">
+                    {{ row.hidden_binding_count }} further bindings are summarized above.
+                    The command line <code>--interface-inventory</code> export lists them all.
+                  </p>
+                {% endif %}
+              </details>
+            {% elif row.binding_total %}
+              <p class="hint">{{ row.binding_total }} bindings, summarized above.</p>
+            {% else %}
+              <p class="hint">No detected bindings.</p>
+            {% endif %}
+
+            <div class="controls">
+              <p class="control control-wide">
+                <label for="{{ row.field('destination') }}">Junos interface</label>
+                <input id="{{ row.field('destination') }}" name="{{ row.field('destination') }}"
+                  type="text" list="junos-interface-options" autocomplete="off" spellcheck="false"
+                  maxlength="64" value="{{ row.selection.physical_name }}"
+                  placeholder="Keep {{ row.current_target }}"
+                  {% if row.errors.get('destination') %}aria-invalid="true" aria-describedby="{{ row.field('destination') }}-error"{% endif %}>
+                {% if row.errors.get('destination') %}
+                  <span class="field-error" id="{{ row.field('destination') }}-error">
+                    <svg class="icon" aria-hidden="true"><use href="#icon-warning" /></svg>
+                    {{ row.errors.get('destination') }}
+                  </span>
+                {% endif %}
+              </p>
+
+              <p class="control control-wide">
+                <label for="{{ row.field('vlan') }}">VLAN treatment</label>
+                <select id="{{ row.field('vlan') }}" name="{{ row.field('vlan') }}" data-vlan-mode
+                  {% if row.errors.get('vlan') %}aria-invalid="true" aria-describedby="{{ row.field('vlan') }}-error"{% endif %}>
+                  {% for value, label in vlan_choices %}
+                    <option value="{{ value }}" {% if row.selection.vlan_choice == value %}selected{% endif %}>{{ label }}</option>
+                  {% endfor %}
+                </select>
+                {% if row.errors.get('vlan') %}
+                  <span class="field-error" id="{{ row.field('vlan') }}-error">
+                    <svg class="icon" aria-hidden="true"><use href="#icon-warning" /></svg>
+                    {{ row.errors.get('vlan') }}
+                  </span>
+                {% endif %}
+              </p>
+
+              <p class="control">
+                <label for="{{ row.field('unit') }}">Unit</label>
+                <input id="{{ row.field('unit') }}" name="{{ row.field('unit') }}"
+                  type="number" inputmode="numeric" min="0" max="16385" step="1"
+                  value="{{ row.selection.unit }}"
+                  {% if row.errors.get('unit') %}aria-invalid="true" aria-describedby="{{ row.field('unit') }}-error"{% endif %}>
+                {% if row.errors.get('unit') %}
+                  <span class="field-error" id="{{ row.field('unit') }}-error">
+                    <svg class="icon" aria-hidden="true"><use href="#icon-warning" /></svg>
+                    {{ row.errors.get('unit') }}
+                  </span>
+                {% endif %}
+              </p>
+
+              <p class="control">
+                <label for="{{ row.field('vlan_id') }}">VLAN ID</label>
+                <input id="{{ row.field('vlan_id') }}" name="{{ row.field('vlan_id') }}" data-vlan-id
+                  type="number" inputmode="numeric" min="1" max="4094" step="1"
+                  value="{{ row.selection.vlan_id }}"
+                  {% if row.errors.get('vlan_id') %}aria-invalid="true" aria-describedby="{{ row.field('vlan_id') }}-error"{% endif %}>
+                {% if row.errors.get('vlan_id') %}
+                  <span class="field-error" id="{{ row.field('vlan_id') }}-error">
+                    <svg class="icon" aria-hidden="true"><use href="#icon-warning" /></svg>
+                    {{ row.errors.get('vlan_id') }}
+                  </span>
+                {% endif %}
+              </p>
+            </div>
+          </fieldset>
+        </li>
+      {% endfor %}
+    </ul>
+  {% endif %}
+
+  {% if workspace.unresolved %}
+    <details class="unresolved">
+      <summary>Unresolved interface references ({{ workspace.unresolved | length }})</summary>
+      <p class="hint">
+        These references name an interface the configuration never defines, so they
+        cannot be mapped here.
+      </p>
+      <ul>
+        {% for reference in workspace.unresolved %}
+          <li>
+            <span class="tag">{{ reference.category }}</span>
+            {{ reference.screenos_name }} &mdash;
+            {% if reference.line_number %}Line {{ reference.line_number }}: {% endif %}
+            {{ reference.summary }}
+          </li>
+        {% endfor %}
+      </ul>
+    </details>
+  {% endif %}
+</section>

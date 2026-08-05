@@ -4,6 +4,26 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased
 
+- feat: add the interface-mapping workspace to the web interface. After a
+  configuration is pasted or uploaded, "Review interface mappings" lists every
+  discovered ScreenOS interface as a card carrying its current Junos target,
+  zone, addresses, VLAN tag, and the policies, routes, NAT rules, address
+  objects, and VPN bindings that depend on it, then offers a Junos destination
+  with SRX suggestions, an optional logical unit, and a VLAN treatment of
+  preserve, untagged, or tagged with an ID. Choices are validated by the same
+  rules as the CLI mapping file, reported inline on the control that caused
+  them, and preserved through a rejection; conversion is refused until they are
+  valid. Interfaces left unmapped keep the converter default, and nothing is
+  stored between requests. `review_interface_mappings` is the new
+  non-raising form of `resolve_interface_mappings` behind both front ends.
+- feat: give the web interface a visual identity and lightweight graphics — an
+  original SVG application icon used as the favicon and page mark, a
+  server-rendered four-stage conversion flow graphic with text status for every
+  stage, and an inline icon sprite for interfaces, VLAN tagging, policies, NAT,
+  routes, VPNs, warnings, and completed mappings. Light and dark themes,
+  reduced-motion support, and a bounded page for large configurations are
+  included; first-party client assets total roughly 4.4 KB gzipped against a
+  100 KB budget asserted in the test suite.
 - feat: inventory every ScreenOS interface binding that affects migration —
   zones, zone policies, contained address objects, static routes, routing
   instances, MIP/DIP NAT, VPN and tunnel references, unnumbered donors, and
