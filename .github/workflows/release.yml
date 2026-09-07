@@ -568,7 +568,7 @@ jobs:
           ensure_immutable_alias "$IMAGE_NAME:sha-$TARGET_SHA"
 
       - name: Generate an SPDX SBOM from the published image
-        uses: anchore/sbom-action@v0.24.0
+        uses: anchore/sbom-action@v0.24.2
         with:
           image: ${{ env.IMAGE_NAME }}@${{ steps.publish.outputs.digest }}
           format: spdx-json

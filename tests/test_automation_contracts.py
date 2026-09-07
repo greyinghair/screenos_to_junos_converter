@@ -230,7 +230,7 @@ def test_release_publishes_only_after_validating_the_resolved_sha() -> None:
     assert "ensure_immutable_alias" in workflow[container_job:publish_job]
     assert workflow[container_job:publish_job].count("--prefer-index=false") == 1
     assert workflow.count("--prefer-index=false") == 2
-    assert "anchore/sbom-action@v0.24.0" in workflow[container_job:publish_job]
+    assert "anchore/sbom-action@v0.24.2" in workflow[container_job:publish_job]
     assert workflow[container_job:publish_job].count("actions/attest@v4") == 2
     assert "sbom-path: container-sbom.spdx.json" in workflow[container_job:publish_job]
     assert "contents: write" in workflow[publish_job:]
