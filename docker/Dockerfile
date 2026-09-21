@@ -1,4 +1,4 @@
-FROM python:3.15.0rc2-alpine3.23@sha256:7632fd1cb85f1253d52b75f63a307f32d3d4b31f9bb6625a19e1b84a118a5ec1
+FROM python:3.15.0rc2-alpine3.23@sha256:d4bc3b7805673cd2c1bcd0412e1bde6e144aab25290a47fef50dcbc5201725d3
 
 ARG APP_VERSION=dev
 
