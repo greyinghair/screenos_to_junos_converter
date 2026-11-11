@@ -111,6 +111,6 @@ Workflows use explicit maintained action releases:
 - `docker/metadata-action@v6`
 - `docker/setup-buildx-action@v4`
 - `actions/attest@v4`
-- `anchore/sbom-action@v0.24.0`
+- `anchore/sbom-action@v0.24.3`
 - `github/codeql-action@v4`
 - `softprops/action-gh-release@v3`
